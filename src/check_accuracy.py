@@ -300,23 +300,46 @@ def run_backtest(storms_df, storm_ids=None, lead_times_hours=LEAD_TIMES_H,
 
 
 def summarize(results_df):
-    """Aggregate per-lead-time metrics. Matches RESULTS.md table shape."""
+    """Aggregate per-lead-time metrics with accuracy percentages.
+
+    Accuracy = % of predictions within acceptable error thresholds:
+      Track: 300km (+24h), 500km (+48h), 750km (+72h) -- scaled by lead time
+      Wind:  within 15 kt
+      Pressure: within 10 hPa
+    """
     if results_df.empty:
         return pd.DataFrame()
+
+    # Thresholds for "accurate" predictions (standard met benchmarks)
+    TRACK_THRESHOLDS_KM = {24: 300, 48: 500, 72: 750}
+    WIND_THRESHOLD_KT = 15.0
+    PRESSURE_THRESHOLD_HPA = 10.0
+
+    # Tag each row with within-threshold flags
+    df = results_df.copy()
+    df["track_accurate"] = df.apply(
+        lambda r: r["track_error_km"] <= TRACK_THRESHOLDS_KM.get(r["lead_h"], 500),
+        axis=1,
+    )
+    df["wind_accurate"] = df["wind_abs_err_kt"] <= WIND_THRESHOLD_KT
+    df["pressure_accurate"] = df["pressure_abs_err_hpa"] <= PRESSURE_THRESHOLD_HPA
 
     agg = {
         "track_error_km": ("track_error_km", "mean"),
         "wind_mae_kt": ("wind_abs_err_kt", "mean"),
         "pressure_mae_hpa": ("pressure_abs_err_hpa", "mean"),
         "samples": ("track_error_km", "count"),
+        "track_accuracy_%": ("track_accurate", "mean"),
+        "wind_accuracy_%": ("wind_accurate", "mean"),
+        "pressure_accuracy_%": ("pressure_accurate", "mean"),
     }
-    if "track_covered" in results_df.columns:
+    if "track_covered" in df.columns:
         agg["track_coverage"] = ("track_covered", "mean")
-    if "wind_covered" in results_df.columns:
+    if "wind_covered" in df.columns:
         agg["wind_coverage"] = ("wind_covered", "mean")
 
     summary = (
-        results_df.groupby("lead_h")
+        df.groupby("lead_h")
         .agg(**agg)
         .reset_index()
         .rename(columns={"lead_h": "lead_time_h"})
@@ -325,7 +348,8 @@ def summarize(results_df):
     for col in ["track_error_km", "wind_mae_kt", "pressure_mae_hpa"]:
         if col in summary.columns:
             summary[col] = summary[col].round(1)
-    for col in ["track_coverage", "wind_coverage"]:
+    for col in ["track_accuracy_%", "wind_accuracy_%", "pressure_accuracy_%",
+                "track_coverage", "wind_coverage"]:
         if col in summary.columns:
             summary[col] = (summary[col] * 100).round(1)
 
@@ -465,7 +489,43 @@ def render_accuracy_tab():
             return
 
         summary = summarize(results_df)
-        st.dataframe(summary, use_container_width=True)
+
+        # --- Prominent accuracy percentage cards ---
+        st.markdown("#### Prediction Accuracy")
+        acc_cols = st.columns(3)
+
+        # Overall accuracy (averaged across all lead times, weighted by samples)
+        total_samples = summary["samples"].sum()
+
+        if "track_accuracy_%" in summary.columns:
+            weighted_track = (summary["track_accuracy_%"] * summary["samples"]).sum() / total_samples
+            acc_cols[0].metric("Track Accuracy", f"{weighted_track:.1f}%")
+        if "wind_accuracy_%" in summary.columns:
+            weighted_wind = (summary["wind_accuracy_%"] * summary["samples"]).sum() / total_samples
+            acc_cols[1].metric("Wind Accuracy", f"{weighted_wind:.1f}%")
+        if "pressure_accuracy_%" in summary.columns:
+            weighted_pres = (summary["pressure_accuracy_%"] * summary["samples"]).sum() / total_samples
+            acc_cols[2].metric("Pressure Accuracy", f"{weighted_pres:.1f}%")
+
+        # --- Per-lead-time accuracy breakdown ---
+        st.markdown("#### Per Lead-Time Breakdown")
+        for _, row in summary.iterrows():
+            lead = int(row["lead_time_h"])
+            lc1, lc2, lc3, lc4 = st.columns(4)
+            lc1.markdown(f"**+{lead}h**")
+            if "track_accuracy_%" in row:
+                lc2.metric("Track", f"{row['track_accuracy_%']:.1f}%",
+                          delta=f"MAE {row['track_error_km']:.0f} km", delta_color="off")
+            if "wind_accuracy_%" in row:
+                lc3.metric("Wind", f"{row['wind_accuracy_%']:.1f}%",
+                          delta=f"MAE {row['wind_mae_kt']:.1f} kt", delta_color="off")
+            if "pressure_accuracy_%" in row:
+                lc4.metric("Pressure", f"{row['pressure_accuracy_%']:.1f}%",
+                          delta=f"MAE {row['pressure_mae_hpa']:.1f} hPa", delta_color="off")
+
+        # --- Full table ---
+        with st.expander("Full metrics table"):
+            st.dataframe(summary, use_container_width=True, hide_index=True)
 
         # Per-storm breakdown
         if results_df["storm_id"].nunique() > 1:
@@ -484,8 +544,8 @@ def render_accuracy_tab():
                 st.dataframe(per_storm, use_container_width=True, hide_index=True)
 
         st.caption(
-            "Track error = great-circle distance (km) between predicted and "
-            "actual position. Wind/pressure = mean absolute error. Same "
-            "metric definitions as RESULTS.md, so these numbers are directly "
-            "comparable to the numbers on stage."
+            "Accuracy = % of predictions within threshold. "
+            "Track: 300km (+24h), 500km (+48h), 750km (+72h). "
+            "Wind: within 15 kt. Pressure: within 10 hPa. "
+            "These are standard operational meteorology benchmarks."
         )
