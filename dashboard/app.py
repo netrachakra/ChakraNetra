@@ -117,8 +117,8 @@ button[data-baseweb="tab"] { font-weight: 500; }
 .stTable th { background: #1E293B; color: #94A3B8; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
 .stTable td { color: #E2E8F0; border-bottom: 1px solid #334155; }
 
-/* Hide default hamburger + footer for clean demo */
-#MainMenu, footer, header { visibility: hidden; }
+/* Hide default hamburger menu + footer for clean demo, but keep header for sidebar toggle */
+#MainMenu, footer { visibility: hidden; }
 </style>
 """
 
@@ -256,13 +256,18 @@ def build_map(storm_df: pd.DataFrame, prediction: dict) -> folium.Map:
     center_lat = storm_df["lat"].mean()
     center_lon = storm_df["lon"].mean()
 
-    # BUG FIX #1: Use built-in tile presets that don't require an API key.
-    # "CartoDB positron" string was hitting the keyed CARTO endpoint.
-    # The named preset "cartodbpositron" uses the free basemaps.cartocdn.com CDN.
+    # BUG FIX #1: Use direct CARTO CDN URL (free, no API key).
+    # The named presets ("cartodbdark_matter", "CartoDB positron") route
+    # through the keyed api.carto.com on some folium/system versions.
+    # This URL hits basemaps.cartocdn.com directly — always free.
     m = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=5,
-        tiles="cartodbdark_matter",  # free, no key needed
+        tiles="https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+        attr=(
+            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> '
+            'contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+        ),
     )
 
     # --- Actual track: intensity-colored segments ---
