@@ -1,0 +1,128 @@
+{
+  "lead_times": {
+    "+24h": {
+      "n_samples": 195,
+      "mean_track_error_km": 239.37,
+      "median_track_error_km": 227.2,
+      "wind_mae_kt": 17.79,
+      "pressure_mae_hpa": 10.39
+    },
+    "+48h": {
+      "n_samples": 150,
+      "mean_track_error_km": 421.54,
+      "median_track_error_km": 400.48,
+      "wind_mae_kt": 19.23,
+      "pressure_mae_hpa": 12.29
+    },
+    "+72h": {
+      "n_samples": 111,
+      "mean_track_error_km": 567.95,
+      "median_track_error_km": 545.56,
+      "wind_mae_kt": 20.69,
+      "pressure_mae_hpa": 15.91
+    }
+  },
+  "storms": {
+    "2019160N11073_+24h": {
+      "n_samples": 49,
+      "mean_track_error_km": 196.33,
+      "wind_mae_kt": 16.07,
+      "pressure_mae_hpa": 9.78
+    },
+    "2019301N05081_+24h": {
+      "n_samples": 58,
+      "mean_track_error_km": 230.76,
+      "wind_mae_kt": 17.5,
+      "pressure_mae_hpa": 9.7
+    },
+    "2020335N06090_+24h": {
+      "n_samples": 25,
+      "mean_track_error_km": 177.74,
+      "wind_mae_kt": 10.61,
+      "pressure_mae_hpa": 4.77
+    },
+    "2021267N18094_+24h": {
+      "n_samples": 38,
+      "mean_track_error_km": 326.78,
+      "wind_mae_kt": 15.99,
+      "pressure_mae_hpa": 7.38
+    },
+    "2022126N07095_+24h": {
+      "n_samples": 25,
+      "mean_track_error_km": 272.5,
+      "wind_mae_kt": 31.72,
+      "pressure_mae_hpa": 23.38
+    },
+    "2019160N11073_+48h": {
+      "n_samples": 41,
+      "mean_track_error_km": 239.56,
+      "wind_mae_kt": 13.23,
+      "pressure_mae_hpa": 10.13
+    },
+    "2019301N05081_+48h": {
+      "n_samples": 50,
+      "mean_track_error_km": 364.57,
+      "wind_mae_kt": 18.58,
+      "pressure_mae_hpa": 13.25
+    },
+    "2020335N06090_+48h": {
+      "n_samples": 17,
+      "mean_track_error_km": 459.63,
+      "wind_mae_kt": 12.1,
+      "pressure_mae_hpa": 7.18
+    },
+    "2021267N18094_+48h": {
+      "n_samples": 25,
+      "mean_track_error_km": 677.75,
+      "wind_mae_kt": 19.35,
+      "pressure_mae_hpa": 4.99
+    },
+    "2022126N07095_+48h": {
+      "n_samples": 17,
+      "mean_track_error_km": 613.11,
+      "wind_mae_kt": 42.58,
+      "pressure_mae_hpa": 30.51
+    },
+    "2019160N11073_+72h": {
+      "n_samples": 33,
+      "mean_track_error_km": 588.04,
+      "wind_mae_kt": 20.93,
+      "pressure_mae_hpa": 19.9
+    },
+    "2019301N05081_+72h": {
+      "n_samples": 42,
+      "mean_track_error_km": 428.24,
+      "wind_mae_kt": 23.3,
+      "pressure_mae_hpa": 15.55
+    },
+    "2020335N06090_+72h": {
+      "n_samples": 10,
+      "mean_track_error_km": 585.24,
+      "wind_mae_kt": 10.17,
+      "pressure_mae_hpa": 6.32
+    },
+    "2021267N18094_+72h": {
+      "n_samples": 17,
+      "mean_track_error_km": 535.95,
+      "wind_mae_kt": 16.88,
+      "pressure_mae_hpa": 15.58
+    },
+    "2022126N07095_+72h": {
+      "n_samples": 9,
+      "mean_track_error_km": 1187.52,
+      "wind_mae_kt": 26.49,
+      "pressure_mae_hpa": 14.23
+    }
+  },
+  "meta": {
+    "n_storms": 5,
+    "storm_ids": [
+      "2019160N11073",
+      "2019301N05081",
+      "2020335N06090",
+      "2021267N18094",
+      "2022126N07095"
+    ],
+    "model_loaded": false
+  }
+}

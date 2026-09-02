@@ -190,6 +190,40 @@ def _predict_direct(storm_id: str, lead_times: list[int]) -> dict:
     }
 
 
+def _predict_from_upload(history_df: pd.DataFrame, lead_times: list[int]) -> dict:
+    """Chain predict_from_history -> calibrate -> risk for uploaded storms."""
+    from src.model import predict_from_history
+    from src.calibration import calibrate
+    from src.risk import compute_risk
+
+    raw = predict_from_history(history_df, lead_times)
+    cal = calibrate(raw)
+
+    risk_result = None
+    if cal.get("intensity"):
+        strongest = max(cal["intensity"], key=lambda p: p["wind_kt"])
+        matching_track = next(
+            (t for t in cal["track"] if t["lead_h"] == strongest["lead_h"]),
+            cal["track"][0] if cal["track"] else None,
+        )
+        if matching_track:
+            risk_result = compute_risk(
+                strongest["wind_kt"],
+                matching_track["lat"],
+                matching_track["lon"],
+            )
+
+    return {
+        "storm_id": cal["storm_id"],
+        "track": cal["track"],
+        "intensity": cal["intensity"],
+        "empirical_coverage": cal.get("empirical_coverage"),
+        "risk": risk_result,
+        "model_version": "direct-import (uploaded)",
+    }
+
+
+
 # --------------------------------------------------------------------------- #
 # Map
 # --------------------------------------------------------------------------- #
@@ -536,27 +570,112 @@ def main():
         if use_api:
             api_up = _api_available(API_BASE)
             if api_up:
-                st.success(f"Connected: {API_BASE}", icon="🟢")
+                st.success(f"Connected: {API_BASE}", icon="\U0001f7e2")
             else:
-                st.warning("API unreachable. Using direct imports.", icon="🟡")
+                st.warning("API unreachable. Using direct imports.", icon="\U0001f7e1")
                 use_api = False
         if not use_api:
-            st.info("Direct-import mode", icon="📦")
+            st.info("Direct-import mode", icon="\U0001f4e6")
 
         st.divider()
 
-        try:
-            storm_ids = _get_storm_ids_api(API_BASE) if (use_api and api_up) else _get_storm_ids_direct()
-        except Exception as e:
-            st.error(f"Cannot load storms: {e}")
-            storm_ids = []
+        # --- Data source: built-in or upload ---
+        data_source = st.radio(
+            "Data Source",
+            ["Built-in storms", "Upload IBTrACS CSV"],
+            horizontal=True,
+        )
 
-        if not storm_ids:
-            st.error("No storm data found. Run `python -m src.data_pipeline` first.")
-            return
-
-        selected_storm = st.selectbox("Select Storm", storm_ids, index=0)
+        # State variables
+        selected_storm = None
+        storm_df = None
+        prediction = None
         lead_times = [24, 48, 72]
+        is_uploaded = False
+        upload_warning = ""
+
+        if data_source == "Built-in storms":
+            try:
+                storm_ids = (_get_storm_ids_api(API_BASE)
+                             if (use_api and api_up)
+                             else _get_storm_ids_direct())
+            except Exception as e:
+                st.error(f"Cannot load storms: {e}")
+                storm_ids = []
+
+            if not storm_ids:
+                st.error("No storm data found. Run `python -m src.data_pipeline` first.")
+                return
+
+            selected_storm = st.selectbox("Select Storm", storm_ids, index=0)
+
+        else:
+            # --- Upload UI (Contract 6) ---
+            st.subheader("Upload a storm (IBTrACS CSV)")
+            uploaded = st.file_uploader(
+                "Any IBTrACS-format CSV -- single or multi-storm export",
+                type="csv",
+            )
+            is_uploaded = True
+
+            if uploaded is not None:
+                # Size check (20 MB)
+                if uploaded.size > 20 * 1024 * 1024:
+                    st.error("File too large (>20 MB). Use a smaller export.")
+                    return
+
+                try:
+                    from src.data_pipeline import validate_upload
+                    raw_upload = pd.read_csv(uploaded, low_memory=False)
+                except Exception:
+                    st.error("Couldn't read that as a CSV -- is it the raw IBTrACS export?")
+                    return
+
+                ok, upload_storms_df, error_msg = validate_upload(raw_upload)
+                if not ok:
+                    st.error(error_msg)
+                    return
+
+                if error_msg:
+                    upload_warning = error_msg
+                    st.warning(error_msg)
+
+                # Storm picker for multi-storm files
+                storm_options = (
+                    upload_storms_df.groupby("storm_id")
+                    .agg(
+                        name=("name", "first") if "name" in upload_storms_df.columns
+                             else ("storm_id", "first"),
+                        basin=("basin", "first"),
+                        obs=("timestamp", "count"),
+                        start=("timestamp", "min"),
+                        end=("timestamp", "max"),
+                    )
+                    .reset_index()
+                )
+
+                def _format_storm(sid):
+                    row = storm_options[storm_options.storm_id == sid].iloc[0]
+                    name = row["name"] if row["name"] and str(row["name"]).strip() not in ("", "NOT_NAMED", "UNNAMED") else ""
+                    label = f"{name} ({sid})" if name else sid
+                    return f"{label} -- {row['basin']}, {row['obs']} obs"
+
+                selected_storm = st.selectbox(
+                    "Storm found in this file",
+                    storm_options["storm_id"].tolist(),
+                    format_func=_format_storm,
+                )
+                storm_df = upload_storms_df[
+                    upload_storms_df["storm_id"] == selected_storm
+                ].copy()
+                storm_df = storm_df.sort_values("timestamp").reset_index(drop=True)
+                # Drop 'name' column before feeding to model
+                if "name" in storm_df.columns:
+                    storm_df = storm_df.drop(columns=["name"])
+
+            else:
+                st.info("Upload a CSV to get started.")
+                return
 
         st.divider()
         # Intensity color scale reference
@@ -566,27 +685,39 @@ def main():
             st.markdown(f"<span style='color:{col};font-size:0.8rem;'>&#9679; {cat}</span>",
                         unsafe_allow_html=True)
 
-    # --- Load data ---
-    try:
-        df = pd.read_csv(STORMS_CSV)
-        storm_df = df[df["storm_id"] == selected_storm].copy()
-        storm_df = storm_df.sort_values("timestamp").reset_index(drop=True)
-    except Exception as e:
-        st.error(f"Cannot read storms.csv: {e}")
-        return
+    # --- Load data (built-in path) ---
+    if not is_uploaded:
+        try:
+            df = pd.read_csv(STORMS_CSV)
+            storm_df = df[df["storm_id"] == selected_storm].copy()
+            storm_df = storm_df.sort_values("timestamp").reset_index(drop=True)
+        except Exception as e:
+            st.error(f"Cannot read storms.csv: {e}")
+            return
 
-    if storm_df.empty:
+    if storm_df is None or storm_df.empty:
         st.warning(f"No observation data for storm **{selected_storm}**. Select a different storm.")
         return
 
     # --- Prediction ---
-    prediction = None
     with st.spinner("Running forecast pipeline..."):
         try:
-            prediction = _predict_api(API_BASE, selected_storm, lead_times) if (use_api and api_up) \
-                else _predict_direct(selected_storm, lead_times)
+            if is_uploaded:
+                # Validate history before inference
+                from src.model import validate_history
+                ok, msg = validate_history(storm_df)
+                if not ok:
+                    st.warning(f"Can't forecast this storm yet: {msg}")
+                    prediction = None
+                else:
+                    prediction = _predict_from_upload(storm_df, lead_times)
+            elif use_api and api_up:
+                prediction = _predict_api(API_BASE, selected_storm, lead_times)
+            else:
+                prediction = _predict_direct(selected_storm, lead_times)
         except Exception as e:
             st.error(f"Prediction failed: {e}")
+
 
     # --- Top metric cards ---
     peak_wind = storm_df["wind_kt"].max()
@@ -642,6 +773,14 @@ def main():
                 cov = prediction.get("empirical_coverage")
                 if cov and cov > 0:
                     st.caption(f"Measured empirical coverage: {cov:.1%} (nominal 80%)")
+                if is_uploaded:
+                    st.caption(
+                        "Uncertainty interval calibrated at 80.7% coverage on our "
+                        "held-out test storms. That coverage guarantee is proven for "
+                        "our test set, not specifically for storms outside it -- the "
+                        "interval is computed the same way here, but treat it as "
+                        "well-calibrated-in-general, not storm-specifically-verified."
+                    )
 
     with tab_risk:
         if not risk:
