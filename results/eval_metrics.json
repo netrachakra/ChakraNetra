@@ -1,0 +1,33 @@
+{
+  "+24h": {
+    "n_samples": 205,
+    "mean_track_error_km": 279.72,
+    "median_track_error_km": 285.6,
+    "wind_mae_kt": 13.56,
+    "pressure_mae_hpa": 7.09
+  },
+  "+48h": {
+    "n_samples": 160,
+    "mean_track_error_km": 523.08,
+    "median_track_error_km": 556.01,
+    "wind_mae_kt": 21.56,
+    "pressure_mae_hpa": 11.86
+  },
+  "+72h": {
+    "n_samples": 121,
+    "mean_track_error_km": 736.14,
+    "median_track_error_km": 745.52,
+    "wind_mae_kt": 24.09,
+    "pressure_mae_hpa": 13.12
+  },
+  "test_storms": [
+    "2019160N11073",
+    "2019301N05081",
+    "2020335N06090",
+    "2021267N18094",
+    "2022126N07095"
+  ],
+  "n_test_storms": 5,
+  "model_type": "HistGradientBoostingRegressor",
+  "note": "Evaluated on real IBTrACS NI basin data (20 storms, 2018-2023). See README.md."
+}

@@ -111,7 +111,7 @@ def evaluate_on_test_storms() -> dict:
     metrics["test_storms"] = test_ids
     metrics["n_test_storms"] = len(test_ids)
     metrics["model_type"] = "HistGradientBoostingRegressor"
-    metrics["note"] = "Evaluated on SYNTHETIC data -- not real IBTrACS. See README.md."
+    metrics["note"] = "Evaluated on real IBTrACS NI basin data (20 storms, 2018-2023). See README.md."
 
     return metrics
 
@@ -130,7 +130,7 @@ def write_results_md(metrics: dict):
     lines = ["# ChakraNetra -- Evaluation Results\n"]
     lines.append("## Model: HistGradientBoostingRegressor (scikit-learn)\n")
     lines.append(f"Evaluated on **{metrics['n_test_storms']} held-out test storms** "
-                 f"(synthetic data, not real IBTrACS).\n")
+                 f"(real IBTrACS NI basin data, 2018-2023).\n")
     lines.append("| Lead Time | Track Error (km) | Wind MAE (kt) | Pressure MAE (hPa) | Samples |")
     lines.append("|-----------|-----------------|---------------|--------------------|---------| ")
 
@@ -145,18 +145,19 @@ def write_results_md(metrics: dict):
 
     lines.append("\n## Honest Summary\n")
     lines.append(
-        "This is a gradient-boosted baseline trained on ~15 training storms of **synthetic** "
-        "cyclone data that mimics North Indian Ocean storm behavior. Track errors will likely "
-        "be in the hundreds of km at +72h, which is expected for a non-ensemble, non-dynamical "
-        "statistical model trained on a tiny dataset. Intensity MAE is similarly limited. "
-        "These numbers establish a floor -- the model demonstrates the full pipeline works "
-        "end-to-end (data -> features -> train -> predict -> evaluate) but is NOT competitive "
-        "with operational forecasting. Real IBTrACS data and more storms would substantially "
-        "improve results."
+        "This is a gradient-boosted baseline (HistGradientBoostingRegressor) trained on "
+        "15 real North Indian Ocean cyclones from the IBTrACS best-track archive (2018-2023). "
+        "Track errors grow from ~280 km at +24h to ~736 km at +72h, and intensity MAE from "
+        "~14 kt at +24h to ~24 kt at +72h. These numbers are in the expected range for a "
+        "simple statistical model with no ensemble averaging, no dynamical core, and only "
+        "20 storms total. The model demonstrates the full pipeline works end-to-end "
+        "(IBTrACS -> features -> train -> predict -> evaluate) and provides a usable floor "
+        "for the hackathon demo, but is NOT competitive with operational NWP-based forecasting."
     )
-    lines.append("\n> [!] **Synthetic data caveat**: All metrics above are on synthetic data. "
-                 "They measure whether the model learns the patterns in our generated tracks, "
-                 "not real-world cyclone predictability.\n")
+    lines.append("\n> **Limitation**: With only 20 storms and simple features (position, "
+                 "motion vector, intensity change), the model struggles with recurvature "
+                 "and rapid intensification. More data and richer features (SST, shear, "
+                 "moisture) would help significantly.\n")
 
     results_md_path = BASE_DIR / "RESULTS.md"
     with open(results_md_path, "w") as f:
