@@ -1,0 +1,27 @@
+{
+  "nominal_coverage": 0.8,
+  "lead_times": {
+    "24": {
+      "track_conformal_km": 317.63,
+      "wind_conformal_kt": 30.15,
+      "n_samples": 205,
+      "empirical_track_coverage": 0.8049,
+      "empirical_wind_coverage": 0.8049
+    },
+    "48": {
+      "track_conformal_km": 685.11,
+      "wind_conformal_kt": 30.68,
+      "n_samples": 160,
+      "empirical_track_coverage": 0.8063,
+      "empirical_wind_coverage": 0.8063
+    },
+    "72": {
+      "track_conformal_km": 859.59,
+      "wind_conformal_kt": 35.99,
+      "n_samples": 121,
+      "empirical_track_coverage": 0.8099,
+      "empirical_wind_coverage": 0.8099
+    }
+  },
+  "empirical_coverage": 0.807
+}
