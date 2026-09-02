@@ -620,8 +620,8 @@ def main():
 
             if uploaded is not None:
                 # Size check (20 MB)
-                if uploaded.size > 20 * 1024 * 1024:
-                    st.error("File too large (>20 MB). Use a smaller export.")
+                if uploaded.size > 200 * 1024 * 1024:
+                    st.error("File too large (>200 MB). Use a smaller export.")
                     return
 
                 try:
