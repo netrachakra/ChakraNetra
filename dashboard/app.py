@@ -1,25 +1,29 @@
 """
 app.py -- ChakraNetra Streamlit Dashboard
+Team Techtonic | SIH 2026 (SIH26070)
 
-Single-screen cyclone forecasting demo:
-  - Dropdown to select a storm
-  - Folium map: actual track + predicted track with calibrated cone + wind radii
-  - Sidebar table: wind intensity with calibrated intervals per lead time
+Single-screen cyclone forecasting demo with:
+  - Metric cards (Storm ID, Basin, Peak Wind, Risk tier)
+  - Tabs: Track & Forecast (map + charts) | Risk (wind radii + gauge)
+  - Trust footer from PIPELINE_STATUS.md
+  - API or direct-import fallback via sidebar
 
-Data source: API at http://localhost:8000 if reachable, else direct imports.
+Data source: FastAPI at http://localhost:8000 or direct src/ imports.
 """
 
+import math
 import os
 import sys
 
 import folium
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 from streamlit_folium import st_folium
 
 # --------------------------------------------------------------------------- #
-# Ensure project root is on path for direct-import fallback
+# Project paths
 # --------------------------------------------------------------------------- #
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
@@ -28,13 +32,102 @@ if PROJECT_ROOT not in sys.path:
 STORMS_CSV = os.path.join(PROJECT_ROOT, "data", "processed", "storms.csv")
 API_BASE = os.environ.get("CHAKRANETRA_API_URL", "http://localhost:8000")
 
+# --------------------------------------------------------------------------- #
+# Design tokens
+# --------------------------------------------------------------------------- #
+ACCENT = "#06B6D4"        # cyan-500 -- primary accent
+ACCENT_DIM = "#164E63"    # cyan-900 -- muted accent
+BG_CARD = "#1E293B"       # slate-800
+BG_SURFACE = "#0F172A"    # slate-900
+TEXT_PRIMARY = "#F1F5F9"   # slate-100
+TEXT_MUTED = "#94A3B8"     # slate-400
+
+# Saffir-Simpson color scale (consistent everywhere)
+CAT_COLORS = {
+    "TD":    "#6B7280",   # gray
+    "TS":    "#22D3EE",   # cyan
+    "Cat 1": "#FACC15",   # yellow
+    "Cat 2": "#F97316",   # orange
+    "Cat 3": "#EF4444",   # red
+    "Cat 4": "#DC2626",   # dark red
+    "Cat 5": "#A855F7",   # purple
+}
+
+CONE_COLORS = ["rgba(251,191,36,0.25)", "rgba(251,146,60,0.20)", "rgba(239,68,68,0.15)"]
+
+# Map element colors
+ACTUAL_TRACK = "#3B82F6"
+PRED_TRACK = "#F43F5E"
+CONE_FILL = "#FB923C"
+WIND_34 = "#FACC15"
+WIND_50 = "#F97316"
+WIND_64 = "#EF4444"
+
+
+def _wind_category(kt: float) -> str:
+    if kt >= 137: return "Cat 5"
+    if kt >= 113: return "Cat 4"
+    if kt >= 96:  return "Cat 3"
+    if kt >= 83:  return "Cat 2"
+    if kt >= 64:  return "Cat 1"
+    if kt >= 34:  return "TS"
+    return "TD"
+
+
+def _wind_color(kt: float) -> str:
+    return CAT_COLORS.get(_wind_category(kt), "#6B7280")
+
+
+def _risk_tier(score: float) -> tuple[str, str]:
+    """Return (label, hex_color) for a risk score."""
+    if score >= 0.85: return "Extreme", "#A855F7"
+    if score >= 0.70: return "Severe",  "#EF4444"
+    if score >= 0.55: return "High",    "#F97316"
+    if score >= 0.40: return "Moderate","#FACC15"
+    if score >= 0.20: return "Low",     "#22D3EE"
+    return "Minimal", "#6B7280"
+
 
 # --------------------------------------------------------------------------- #
-# Backend communication (API or direct fallback)
+# CSS injection
+# --------------------------------------------------------------------------- #
+CUSTOM_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* Global */
+.stApp { font-family: 'Inter', sans-serif; }
+code, .stCode { font-family: 'JetBrains Mono', monospace; }
+
+/* Metric cards */
+div[data-testid="stMetric"] {
+    background: #1E293B;
+    border: 1px solid #334155;
+    border-radius: 10px;
+    padding: 12px 16px;
+}
+div[data-testid="stMetric"] label { color: #94A3B8 !important; font-size: 0.75rem !important; }
+div[data-testid="stMetric"] div[data-testid="stMetricValue"] { color: #F1F5F9 !important; font-weight: 600 !important; }
+
+/* Tab styling */
+button[data-baseweb="tab"] { font-weight: 500; }
+
+/* Tables */
+.stTable table { border-collapse: collapse; width: 100%; }
+.stTable th { background: #1E293B; color: #94A3B8; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.stTable td { color: #E2E8F0; border-bottom: 1px solid #334155; }
+
+/* Hide default hamburger + footer for clean demo */
+#MainMenu, footer, header { visibility: hidden; }
+</style>
+"""
+
+
+# --------------------------------------------------------------------------- #
+# Backend communication
 # --------------------------------------------------------------------------- #
 
 def _api_available(base_url: str) -> bool:
-    """Check if the FastAPI backend is reachable."""
     try:
         import httpx
         r = httpx.get(f"{base_url}/v1/health", timeout=2.0)
@@ -66,7 +159,6 @@ def _get_storm_ids_direct() -> list[str]:
 
 
 def _predict_direct(storm_id: str, lead_times: list[int]) -> dict:
-    """Chain predict -> calibrate -> risk directly."""
     from src.model import predict_track_intensity
     from src.calibration import calibrate
     from src.risk import compute_risk
@@ -74,7 +166,6 @@ def _predict_direct(storm_id: str, lead_times: list[int]) -> dict:
     raw = predict_track_intensity(storm_id, lead_times)
     cal = calibrate(raw)
 
-    # Compute risk from strongest predicted wind
     risk_result = None
     if cal.get("intensity"):
         strongest = max(cal["intensity"], key=lambda p: p["wind_kt"])
@@ -89,7 +180,7 @@ def _predict_direct(storm_id: str, lead_times: list[int]) -> dict:
                 matching_track["lon"],
             )
 
-    result = {
+    return {
         "storm_id": cal["storm_id"],
         "track": cal["track"],
         "intensity": cal["intensity"],
@@ -97,247 +188,385 @@ def _predict_direct(storm_id: str, lead_times: list[int]) -> dict:
         "risk": risk_result,
         "model_version": "direct-import",
     }
-    return result
 
 
 # --------------------------------------------------------------------------- #
-# Map building
+# Map
 # --------------------------------------------------------------------------- #
 
-# Color scheme
-ACTUAL_TRACK_COLOR = "#2563EB"     # blue
-PREDICTED_TRACK_COLOR = "#DC2626"  # red
-CONE_COLOR = "#FCA5A5"            # light red
-WIND_34_COLOR = "#FDE68A"         # yellow
-WIND_50_COLOR = "#FDBA74"         # orange
-WIND_64_COLOR = "#F87171"         # red
+def _bearing_point(lat, lon, distance_km, bearing_deg):
+    """Compute a point at a given distance and bearing from origin."""
+    R = 6371.0
+    d = distance_km / R
+    b = math.radians(bearing_deg)
+    lat1 = math.radians(lat)
+    lon1 = math.radians(lon)
+    lat2 = math.asin(math.sin(lat1) * math.cos(d) + math.cos(lat1) * math.sin(d) * math.cos(b))
+    lon2 = lon1 + math.atan2(math.sin(b) * math.sin(d) * math.cos(lat1),
+                              math.cos(d) - math.sin(lat1) * math.sin(lat2))
+    return math.degrees(lat2), math.degrees(lon2)
 
 
-def _intensity_to_color(wind_kt: float) -> str:
-    """Map wind speed to marker color (Saffir-Simpson-ish)."""
-    if wind_kt >= 137:
-        return "#7C3AED"   # purple - Cat 5
-    elif wind_kt >= 113:
-        return "#DC2626"   # red - Cat 4
-    elif wind_kt >= 96:
-        return "#EA580C"   # orange - Cat 3
-    elif wind_kt >= 83:
-        return "#D97706"   # amber - Cat 2
-    elif wind_kt >= 64:
-        return "#CA8A04"   # yellow - Cat 1
-    elif wind_kt >= 34:
-        return "#059669"   # green - TS
-    else:
-        return "#6B7280"   # gray - TD
+def _cone_polygon_coords(lat, lon, radius_km, n_points=36):
+    """Generate a circle polygon (list of [lat,lon]) for the uncertainty cone."""
+    coords = []
+    for i in range(n_points + 1):
+        bearing = 360.0 * i / n_points
+        plat, plon = _bearing_point(lat, lon, radius_km, bearing)
+        coords.append([plat, plon])
+    return coords
 
 
-def build_map(
-    storm_df: pd.DataFrame,
-    prediction: dict,
-) -> folium.Map:
-    """
-    Build a Folium map with:
-    1. Actual historical track (blue polyline + circle markers)
-    2. Predicted track (red dashed polyline + triangle markers)
-    3. Calibrated cone overlay (translucent red circles at each predicted point)
-    4. Wind radii circles (34/50/64 kt) at the strongest predicted point
-    """
-    # Center map on the storm's midpoint
+def build_map(storm_df: pd.DataFrame, prediction: dict) -> folium.Map:
+    """Build the forecast map with actual + predicted tracks and overlays."""
     center_lat = storm_df["lat"].mean()
     center_lon = storm_df["lon"].mean()
+
+    # BUG FIX #1: Use built-in tile presets that don't require an API key.
+    # "CartoDB positron" string was hitting the keyed CARTO endpoint.
+    # The named preset "cartodbpositron" uses the free basemaps.cartocdn.com CDN.
     m = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=5,
-        tiles="CartoDB positron",
+        tiles="cartodbdark_matter",  # free, no key needed
     )
 
-    # --- 1. Actual historical track ---
-    actual_coords = list(zip(storm_df["lat"], storm_df["lon"]))
-    folium.PolyLine(
-        actual_coords,
-        color=ACTUAL_TRACK_COLOR,
-        weight=3,
-        opacity=0.8,
-        tooltip="Actual Track (IBTrACS)",
-    ).add_to(m)
+    # --- Actual track: intensity-colored segments ---
+    for i in range(len(storm_df) - 1):
+        row = storm_df.iloc[i]
+        nxt = storm_df.iloc[i + 1]
+        color = _wind_color(row["wind_kt"])
+        folium.PolyLine(
+            [[row["lat"], row["lon"]], [nxt["lat"], nxt["lon"]]],
+            color=color, weight=3, opacity=0.9,
+            tooltip=f"Actual | {row['timestamp']} | {row['wind_kt']:.0f} kt ({_wind_category(row['wind_kt'])})",
+        ).add_to(m)
 
-    # Mark each actual observation with intensity-colored dot
+    # Observation dots
     for _, row in storm_df.iterrows():
         folium.CircleMarker(
             location=[row["lat"], row["lon"]],
             radius=4,
-            color=_intensity_to_color(row["wind_kt"]),
-            fill=True,
-            fill_opacity=0.8,
-            tooltip=(
-                f"Actual | {row['timestamp']}\n"
-                f"Wind: {row['wind_kt']:.0f} kt | "
-                f"Pres: {row['pressure_hpa']:.0f} hPa"
-            ),
+            color=_wind_color(row["wind_kt"]),
+            fill=True, fill_opacity=0.9, weight=1,
+            tooltip=f"{row['timestamp']} | {row['wind_kt']:.0f} kt | {row['pressure_hpa']:.0f} hPa",
         ).add_to(m)
 
-    # Mark genesis (first obs) with a star-like marker
+    # Genesis marker
     genesis = storm_df.iloc[0]
     folium.Marker(
         location=[genesis["lat"], genesis["lon"]],
-        icon=folium.Icon(color="blue", icon="play", prefix="fa"),
+        icon=folium.DivIcon(html=(
+            '<div style="background:#3B82F6;color:white;border-radius:50%;width:20px;height:20px;'
+            'display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;'
+            'border:2px solid white;">G</div>'
+        )),
         tooltip=f"Genesis: {genesis['timestamp']}",
     ).add_to(m)
 
-    # --- 2. Predicted track ---
+    # --- Predicted track + cones ---
     if prediction and prediction.get("track"):
-        # Get last actual position as start of prediction
         last_actual = storm_df.iloc[-1]
         pred_coords = [[last_actual["lat"], last_actual["lon"]]]
 
         for pt in prediction["track"]:
             pred_coords.append([pt["lat"], pt["lon"]])
 
-            # Triangle marker for predicted positions
-            folium.RegularPolygonMarker(
-                location=[pt["lat"], pt["lon"]],
-                number_of_sides=3,
-                radius=8,
-                color=PREDICTED_TRACK_COLOR,
-                fill=True,
-                fill_color=PREDICTED_TRACK_COLOR,
-                fill_opacity=0.7,
-                tooltip=f"Predicted +{pt['lead_h']}h | Lat: {pt['lat']}, Lon: {pt['lon']}",
-            ).add_to(m)
+            # Predicted intensity color
+            wind_at_lead = 40.0  # fallback
+            if prediction.get("intensity"):
+                match_int = next(
+                    (ip for ip in prediction["intensity"] if ip["lead_h"] == pt["lead_h"]),
+                    None,
+                )
+                if match_int:
+                    wind_at_lead = match_int["wind_kt"]
 
-            # --- 3. Calibrated cone overlay ---
-            cone_upper = pt.get("cone_km_upper")
+            # Cone as shaded polygon (not circle)
+            cone_upper = pt.get("cone_km_upper", 0)
             if cone_upper and cone_upper > 0:
-                folium.Circle(
-                    location=[pt["lat"], pt["lon"]],
-                    radius=cone_upper * 1000,  # km to meters
-                    color=CONE_COLOR,
-                    fill=True,
-                    fill_color=CONE_COLOR,
-                    fill_opacity=0.15,
-                    weight=1,
-                    tooltip=f"+{pt['lead_h']}h cone: {cone_upper:.0f} km radius",
+                poly_coords = _cone_polygon_coords(pt["lat"], pt["lon"], cone_upper)
+                folium.Polygon(
+                    locations=poly_coords,
+                    color=CONE_FILL, weight=1, opacity=0.4,
+                    fill=True, fill_color=CONE_FILL, fill_opacity=0.12,
+                    tooltip=f"+{pt['lead_h']}h uncertainty cone: {cone_upper:.0f} km radius",
                 ).add_to(m)
 
-        # Dashed predicted track line
+            # Predicted point marker
+            folium.CircleMarker(
+                location=[pt["lat"], pt["lon"]],
+                radius=7,
+                color=PRED_TRACK, fill=True,
+                fill_color=_wind_color(wind_at_lead),
+                fill_opacity=0.9, weight=2,
+                tooltip=(
+                    f"Forecast +{pt['lead_h']}h | "
+                    f"Lat: {pt['lat']:.2f}, Lon: {pt['lon']:.2f} | "
+                    f"{wind_at_lead:.0f} kt ({_wind_category(wind_at_lead)})"
+                ),
+            ).add_to(m)
+
+            # Lead-time label
+            folium.Marker(
+                location=[pt["lat"], pt["lon"]],
+                icon=folium.DivIcon(html=(
+                    f'<div style="color:white;font-size:9px;font-weight:600;'
+                    f'text-shadow:0 0 3px black;margin-left:10px;margin-top:-5px;">'
+                    f'+{pt["lead_h"]}h</div>'
+                )),
+            ).add_to(m)
+
+        # Dashed predicted line
         folium.PolyLine(
             pred_coords,
-            color=PREDICTED_TRACK_COLOR,
-            weight=2,
-            dash_array="8 6",
-            opacity=0.8,
+            color=PRED_TRACK, weight=2, dash_array="6 4", opacity=0.8,
             tooltip="Predicted Track",
         ).add_to(m)
 
-    # --- 4. Wind radii circles ---
+    # --- Wind radii circles ---
     risk = prediction.get("risk") if prediction else None
-    if risk and risk.get("wind_radii_km"):
-        # Place at strongest predicted point
-        if prediction.get("intensity"):
-            strongest = max(prediction["intensity"], key=lambda p: p["wind_kt"])
-            matching = next(
-                (t for t in prediction["track"] if t["lead_h"] == strongest["lead_h"]),
-                None,
-            )
-            if matching:
-                radii = risk["wind_radii_km"]
-                for label, color, key in [
-                    ("34 kt winds", WIND_34_COLOR, "34kt"),
-                    ("50 kt winds", WIND_50_COLOR, "50kt"),
-                    ("64 kt winds", WIND_64_COLOR, "64kt"),
-                ]:
-                    r_km = radii.get(key, 0)
-                    if r_km > 0:
-                        folium.Circle(
-                            location=[matching["lat"], matching["lon"]],
-                            radius=r_km * 1000,
-                            color=color,
-                            fill=True,
-                            fill_color=color,
-                            fill_opacity=0.12,
-                            weight=2,
-                            tooltip=f"{label}: {r_km:.0f} km radius",
-                        ).add_to(m)
+    if risk and risk.get("wind_radii_km") and prediction.get("intensity"):
+        strongest = max(prediction["intensity"], key=lambda p: p["wind_kt"])
+        matching = next(
+            (t for t in prediction["track"] if t["lead_h"] == strongest["lead_h"]),
+            None,
+        )
+        if matching:
+            radii = risk["wind_radii_km"]
+            for label, color, key in [
+                ("34 kt", WIND_34, "34kt"),
+                ("50 kt", WIND_50, "50kt"),
+                ("64 kt", WIND_64, "64kt"),
+            ]:
+                r_km = radii.get(key, 0)
+                if r_km > 0:
+                    folium.Circle(
+                        location=[matching["lat"], matching["lon"]],
+                        radius=r_km * 1000,
+                        color=color, weight=2, opacity=0.7,
+                        fill=True, fill_color=color, fill_opacity=0.08,
+                        tooltip=f"{label} wind radius: {r_km:.0f} km",
+                    ).add_to(m)
 
-    # Fit map bounds to show everything
+    # Fit bounds
     all_lats = list(storm_df["lat"])
     all_lons = list(storm_df["lon"])
     if prediction and prediction.get("track"):
         all_lats += [pt["lat"] for pt in prediction["track"]]
         all_lons += [pt["lon"] for pt in prediction["track"]]
-    if all_lats and all_lons:
-        m.fit_bounds([
-            [min(all_lats) - 1, min(all_lons) - 1],
-            [max(all_lats) + 1, max(all_lons) + 1],
-        ])
+    m.fit_bounds([
+        [min(all_lats) - 1, min(all_lons) - 1],
+        [max(all_lats) + 1, max(all_lons) + 1],
+    ])
 
     return m
 
 
 # --------------------------------------------------------------------------- #
-# Streamlit app
+# Plotly charts
+# --------------------------------------------------------------------------- #
+
+def _build_wind_chart(prediction: dict) -> go.Figure:
+    """Wind speed vs lead time with calibrated confidence band."""
+    pts = prediction.get("intensity", [])
+    if not pts:
+        return None
+
+    leads = [p["lead_h"] for p in pts]
+    winds = [p["wind_kt"] for p in pts]
+    lows = [p["interval_kt"][0] if p.get("interval_kt") else p["wind_kt"] for p in pts]
+    highs = [p["interval_kt"][1] if p.get("interval_kt") else p["wind_kt"] for p in pts]
+
+    fig = go.Figure()
+    # Confidence band
+    fig.add_trace(go.Scatter(
+        x=leads + leads[::-1], y=highs + lows[::-1],
+        fill="toself", fillcolor="rgba(6,182,212,0.15)",
+        line=dict(color="rgba(0,0,0,0)"),
+        name="80% Interval", hoverinfo="skip",
+    ))
+    # Point predictions
+    fig.add_trace(go.Scatter(
+        x=leads, y=winds, mode="lines+markers",
+        line=dict(color=ACCENT, width=2),
+        marker=dict(size=8, color=[_wind_color(w) for w in winds], line=dict(color="white", width=1)),
+        name="Forecast",
+        hovertemplate="+%{x}h: %{y:.1f} kt<extra></extra>",
+    ))
+    # Category thresholds
+    for kt, label, color in [(34, "TS", "#22D3EE"), (64, "Cat 1", "#FACC15"), (96, "Cat 3", "#EF4444")]:
+        fig.add_hline(y=kt, line_dash="dot", line_color=color, opacity=0.4,
+                      annotation_text=label, annotation_position="bottom right",
+                      annotation_font_color=color, annotation_font_size=10)
+
+    fig.update_layout(
+        template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        height=260, margin=dict(l=40, r=20, t=30, b=40),
+        xaxis=dict(title="Lead Time (hours)", dtick=24, gridcolor="#334155"),
+        yaxis=dict(title="Wind (kt)", gridcolor="#334155"),
+        legend=dict(orientation="h", y=-0.25), font=dict(family="Inter", size=12),
+        title=dict(text="Wind Speed Forecast", font=dict(size=14, color=TEXT_MUTED)),
+    )
+    return fig
+
+
+def _build_pressure_chart(prediction: dict) -> go.Figure:
+    """Pressure vs lead time."""
+    pts = prediction.get("intensity", [])
+    if not pts:
+        return None
+
+    leads = [p["lead_h"] for p in pts]
+    pres = [p["pressure_hpa"] for p in pts]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=leads, y=pres, mode="lines+markers",
+        line=dict(color="#A78BFA", width=2),
+        marker=dict(size=8, color="#A78BFA", line=dict(color="white", width=1)),
+        name="Pressure",
+        hovertemplate="+%{x}h: %{y:.0f} hPa<extra></extra>",
+    ))
+    fig.update_layout(
+        template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        height=220, margin=dict(l=40, r=20, t=30, b=40),
+        xaxis=dict(title="Lead Time (hours)", dtick=24, gridcolor="#334155"),
+        yaxis=dict(title="Pressure (hPa)", gridcolor="#334155"),
+        legend=dict(orientation="h", y=-0.3), font=dict(family="Inter", size=12),
+        title=dict(text="Central Pressure Forecast", font=dict(size=14, color=TEXT_MUTED)),
+    )
+    return fig
+
+
+def _build_risk_gauge(score: float) -> go.Figure:
+    """Risk score gauge."""
+    tier, color = _risk_tier(score)
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=score * 100,
+        number=dict(suffix="%", font=dict(size=36, color="white")),
+        title=dict(text=tier, font=dict(size=18, color=color)),
+        gauge=dict(
+            axis=dict(range=[0, 100], tickcolor="#475569", dtick=20),
+            bar=dict(color=color, thickness=0.3),
+            bgcolor="#1E293B",
+            borderwidth=0,
+            steps=[
+                dict(range=[0, 20],  color="#164E63"),
+                dict(range=[20, 40], color="#1E3A5F"),
+                dict(range=[40, 55], color="#3B2F0A"),
+                dict(range=[55, 70], color="#4A1D0A"),
+                dict(range=[70, 85], color="#5C0A0A"),
+                dict(range=[85, 100],color="#3B0764"),
+            ],
+            threshold=dict(line=dict(color="white", width=2), thickness=0.8, value=score * 100),
+        ),
+    ))
+    fig.update_layout(
+        height=220, margin=dict(l=30, r=30, t=40, b=10),
+        paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Inter", color="white"),
+    )
+    return fig
+
+
+# --------------------------------------------------------------------------- #
+# Legend HTML
+# --------------------------------------------------------------------------- #
+MAP_LEGEND_HTML = f"""
+<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;
+            padding:8px 12px;border-radius:8px;background:#1E293B;
+            border:1px solid #334155;font-size:0.78rem;color:#CBD5E1;">
+    <span><span style="display:inline-block;width:14px;height:3px;background:{ACTUAL_TRACK};
+          border-radius:2px;vertical-align:middle;margin-right:4px;"></span>Actual Track</span>
+    <span><span style="display:inline-block;width:14px;height:3px;background:{PRED_TRACK};
+          border-radius:2px;vertical-align:middle;margin-right:4px;
+          border-top:2px dashed {PRED_TRACK};height:0;"></span>Predicted Track</span>
+    <span><span style="display:inline-block;width:12px;height:12px;background:{CONE_FILL};
+          opacity:0.4;border-radius:50%;vertical-align:middle;margin-right:4px;"></span>Uncertainty Cone</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border:2px solid {WIND_34};
+          border-radius:50%;vertical-align:middle;margin-right:3px;"></span>34 kt</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border:2px solid {WIND_50};
+          border-radius:50%;vertical-align:middle;margin-right:3px;"></span>50 kt</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border:2px solid {WIND_64};
+          border-radius:50%;vertical-align:middle;margin-right:3px;"></span>64 kt</span>
+    <span style="margin-left:auto;color:#64748B;">Tiles: CARTO Dark Matter (free tier)</span>
+</div>
+"""
+
+
+# --------------------------------------------------------------------------- #
+# Main app
 # --------------------------------------------------------------------------- #
 
 def main():
     st.set_page_config(
-        page_title="ChakraNetra - Cyclone Forecast",
-        page_icon="🌀",
+        page_title="ChakraNetra | AI Cyclone Forecasting",
+        page_icon="https://em-content.zobj.net/source/twitter/408/cyclone_1f300.png",
         layout="wide",
+        initial_sidebar_state="expanded",
     )
+    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-    st.title("🌀 ChakraNetra — AI Cyclone Forecasting")
-    st.caption("SIH Hackathon Prototype | North Indian Ocean Basin")
+    # --- Header ---
+    st.markdown(
+        f"""
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:4px;">
+            <span style="font-size:2.2rem;">&#127744;</span>
+            <div>
+                <h1 style="margin:0;padding:0;font-size:1.8rem;font-weight:700;
+                    color:{TEXT_PRIMARY};letter-spacing:-0.02em;">ChakraNetra</h1>
+                <p style="margin:0;color:{TEXT_MUTED};font-size:0.85rem;">
+                    AI-Powered Cyclone Track &amp; Intensity Forecasting
+                    &nbsp;|&nbsp; Team Techtonic &nbsp;|&nbsp; SIH 2026</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # --- Sidebar ---
     with st.sidebar:
-        st.header("Settings")
+        st.markdown(f"<h3 style='color:{ACCENT};margin-bottom:4px;'>Control Panel</h3>",
+                    unsafe_allow_html=True)
 
-        # Mode toggle
-        use_api = st.checkbox(
-            "Use API backend",
-            value=False,
-            help="If checked, calls http://localhost:8000. Otherwise imports modules directly.",
-        )
-
+        use_api = st.toggle("Use API backend", value=False,
+                            help="Toggle between API and direct-import mode")
         api_up = False
         if use_api:
             api_up = _api_available(API_BASE)
             if api_up:
-                st.success(f"API connected: {API_BASE}")
+                st.success(f"Connected: {API_BASE}", icon="🟢")
             else:
-                st.warning(f"API unreachable at {API_BASE}. Falling back to direct imports.")
+                st.warning("API unreachable. Using direct imports.", icon="🟡")
                 use_api = False
-
         if not use_api:
-            st.info("Mode: Direct import (no API)")
+            st.info("Direct-import mode", icon="📦")
 
         st.divider()
 
-        # Storm selector
-        st.subheader("Select Storm")
         try:
-            if use_api and api_up:
-                storm_ids = _get_storm_ids_api(API_BASE)
-            else:
-                storm_ids = _get_storm_ids_direct()
+            storm_ids = _get_storm_ids_api(API_BASE) if (use_api and api_up) else _get_storm_ids_direct()
         except Exception as e:
             st.error(f"Cannot load storms: {e}")
             storm_ids = []
 
         if not storm_ids:
-            st.error("No storms available. Run `python -m src.data_pipeline` first.")
+            st.error("No storm data found. Run `python -m src.data_pipeline` first.")
             return
 
-        selected_storm = st.selectbox(
-            "Storm ID",
-            storm_ids,
-            index=0,
-            help="IBTrACS Storm Identifier",
-        )
-
+        selected_storm = st.selectbox("Select Storm", storm_ids, index=0)
         lead_times = [24, 48, 72]
 
-    # --- Load actual track ---
+        st.divider()
+        # Intensity color scale reference
+        st.markdown("<p style='color:#94A3B8;font-size:0.75rem;margin-bottom:4px;'>INTENSITY SCALE</p>",
+                    unsafe_allow_html=True)
+        for cat, col in CAT_COLORS.items():
+            st.markdown(f"<span style='color:{col};font-size:0.8rem;'>&#9679; {cat}</span>",
+                        unsafe_allow_html=True)
+
+    # --- Load data ---
     try:
         df = pd.read_csv(STORMS_CSV)
         storm_df = df[df["storm_id"] == selected_storm].copy()
@@ -347,99 +576,150 @@ def main():
         return
 
     if storm_df.empty:
-        st.warning(f"No data for storm {selected_storm}")
+        st.warning(f"No observation data for storm **{selected_storm}**. Select a different storm.")
         return
 
-    # --- Get prediction ---
+    # --- Prediction ---
     prediction = None
-    with st.spinner("Running forecast..."):
+    with st.spinner("Running forecast pipeline..."):
         try:
-            if use_api and api_up:
-                prediction = _predict_api(API_BASE, selected_storm, lead_times)
-            else:
-                prediction = _predict_direct(selected_storm, lead_times)
+            prediction = _predict_api(API_BASE, selected_storm, lead_times) if (use_api and api_up) \
+                else _predict_direct(selected_storm, lead_times)
         except Exception as e:
             st.error(f"Prediction failed: {e}")
 
-    # --- Main layout: map + sidebar table ---
-    col_map, col_info = st.columns([3, 1])
+    # --- Top metric cards ---
+    peak_wind = storm_df["wind_kt"].max()
+    basin = storm_df.iloc[0].get("basin", "NI")
+    risk = prediction.get("risk") if prediction else None
+    risk_score = risk["risk_score"] if risk else 0.0
+    tier_label, tier_color = _risk_tier(risk_score)
 
-    with col_map:
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Storm ID", selected_storm)
+    c2.metric("Basin", "Bay of Bengal" if basin == "BOB" else "Arabian Sea" if basin == "ARB" else basin)
+    c3.metric("Peak Wind", f"{peak_wind:.0f} kt", delta=_wind_category(peak_wind))
+    c4.metric("Risk Tier", tier_label)
+
+    # --- Tabs ---
+    tab_track, tab_risk = st.tabs(["Track & Forecast", "Risk Assessment"])
+
+    with tab_track:
+        # Map row
         m = build_map(storm_df, prediction)
-        st_folium(m, width=None, height=550, returned_objects=[])
+        # BUG FIX #2: Set explicit height and use_container_width to prevent
+        # blank/black region caused by iframe height mismatch with the map component.
+        st_folium(m, height=480, use_container_width=True, returned_objects=[])
 
-    with col_info:
-        # Storm summary
-        st.subheader(f"Storm: {selected_storm}")
-        st.metric("Basin", storm_df.iloc[0].get("basin", "NI"))
-        st.metric("Observations", len(storm_df))
-        peak = storm_df["wind_kt"].max()
-        st.metric("Peak Wind", f"{peak:.0f} kt")
+        # Legend
+        st.markdown(MAP_LEGEND_HTML, unsafe_allow_html=True)
 
-        if prediction:
-            st.divider()
+        # Charts row
+        if prediction and prediction.get("intensity"):
+            ch1, ch2 = st.columns(2)
+            with ch1:
+                wfig = _build_wind_chart(prediction)
+                if wfig:
+                    st.plotly_chart(wfig, use_container_width=True, config={"displayModeBar": False})
+            with ch2:
+                pfig = _build_pressure_chart(prediction)
+                if pfig:
+                    st.plotly_chart(pfig, use_container_width=True, config={"displayModeBar": False})
 
-            # Intensity table with calibrated intervals
-            st.subheader("Forecast Intensity")
-            if prediction.get("intensity"):
+            # Numeric table (compact, below charts)
+            with st.expander("Numeric Forecast Table", expanded=False):
                 rows = []
                 for pt in prediction["intensity"]:
                     interval = pt.get("interval_kt")
-                    if interval:
-                        interval_str = f"[{interval[0]:.0f}, {interval[1]:.0f}]"
-                    else:
-                        interval_str = "--"
                     rows.append({
-                        "Lead": f"+{pt['lead_h']}h",
+                        "Lead Time": f"+{pt['lead_h']}h",
                         "Wind (kt)": f"{pt['wind_kt']:.1f}",
-                        "80% Interval": interval_str,
-                        "Pres (hPa)": f"{pt['pressure_hpa']:.0f}",
+                        "80% Interval (kt)": f"[{interval[0]:.0f}, {interval[1]:.0f}]" if interval else "--",
+                        "Pressure (hPa)": f"{pt['pressure_hpa']:.0f}",
                     })
-                st.table(pd.DataFrame(rows))
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-            # Empirical coverage
-            cov = prediction.get("empirical_coverage")
-            if cov and cov > 0:
-                st.caption(f"Empirical coverage: {cov:.1%}")
+                cov = prediction.get("empirical_coverage")
+                if cov and cov > 0:
+                    st.caption(f"Measured empirical coverage: {cov:.1%} (nominal 80%)")
 
-            # Risk summary
-            risk = prediction.get("risk")
-            if risk:
-                st.divider()
-                st.subheader("Risk Assessment")
-                score = risk["risk_score"]
-                # Color-code risk
-                if score >= 0.7:
-                    st.error(f"Risk Score: {score:.2f}")
-                elif score >= 0.4:
-                    st.warning(f"Risk Score: {score:.2f}")
-                else:
-                    st.success(f"Risk Score: {score:.2f}")
+    with tab_risk:
+        if not risk:
+            st.info("No risk assessment available for this storm.")
+        else:
+            r1, r2 = st.columns([1, 1])
 
+            with r1:
+                # Gauge
+                gauge = _build_risk_gauge(risk_score)
+                st.plotly_chart(gauge, use_container_width=True, config={"displayModeBar": False})
+
+                # Plain-language sentence
+                tier_label, tier_color = _risk_tier(risk_score)
+                strongest_wind = max(prediction["intensity"], key=lambda p: p["wind_kt"])["wind_kt"] \
+                    if prediction and prediction.get("intensity") else 0
+                st.markdown(
+                    f"<p style='text-align:center;color:{tier_color};font-weight:600;font-size:1rem;'>"
+                    f"{'This storm poses a ' + tier_label.lower() + ' wind-damage risk at ' + f'{strongest_wind:.0f}' + ' kt sustained winds.' if strongest_wind > 0 else ''}"
+                    f"</p>",
+                    unsafe_allow_html=True,
+                )
+
+            with r2:
+                st.markdown(f"<h4 style='color:{TEXT_MUTED};'>Wind Radii</h4>", unsafe_allow_html=True)
                 radii = risk.get("wind_radii_km", {})
-                r_rows = []
-                for key in ["34kt", "50kt", "64kt"]:
-                    r = radii.get(key, 0)
-                    r_rows.append({"Threshold": key, "Radius (km)": f"{r:.0f}" if r > 0 else "--"})
-                st.table(pd.DataFrame(r_rows))
+                for key, label, color in [("34kt", "Tropical Storm (34 kt)", WIND_34),
+                                           ("50kt", "Strong TS (50 kt)", WIND_50),
+                                           ("64kt", "Hurricane (64 kt)", WIND_64)]:
+                    r_km = radii.get(key, 0)
+                    st.markdown(
+                        f"<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
+                        f"<span style='display:inline-block;width:14px;height:14px;"
+                        f"border:2px solid {color};border-radius:50%;'></span>"
+                        f"<span style='color:{TEXT_PRIMARY};'>{label}:</span>"
+                        f"<span style='color:{color};font-weight:600;'>"
+                        f"{'%.0f km' % r_km if r_km > 0 else 'N/A (below threshold)'}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
 
-            # Model version
-            mv = prediction.get("model_version", "unknown")
-            st.caption(f"Model: {mv}")
+                st.divider()
+                st.markdown(
+                    f"<p style='color:{TEXT_MUTED};font-size:0.78rem;'>"
+                    f"Wind field modeled using a modified Rankine vortex "
+                    f"(decay exponent 0.5). RMW estimated via linear regression. "
+                    f"Population-density weighting is not included in this prototype.</p>",
+                    unsafe_allow_html=True,
+                )
 
-    # --- Legend ---
+    # --- Trust footer ---
+    with st.expander("About this model", expanded=False):
+        st.markdown(
+            f"""
+**Data**: Real NOAA IBTrACS v04r01 (North Indian Ocean, 20 storms 2018-2023). Not synthetic.
+
+**Model**: HistGradientBoostingRegressor (scikit-learn) -- a simple statistical baseline,
+not an ensemble or dynamical model. Track errors: ~280 km (+24h) to ~736 km (+72h).
+Not competitive with operational NWP forecasting.
+
+**Calibration**: Split-conformal prediction with measured 80.7% empirical coverage (not hardcoded).
+
+**Risk**: Modified Rankine vortex wind field. RMW from linear regression (statistical estimate,
+not observed). Risk score is wind-speed-only; no population weighting.
+
+**Not built this sprint**: Satellite imagery, CNN, Dvorak classification, Grad-CAM,
+real SMS/WhatsApp alerts, population-density risk weighting.
+
+*Model version: {prediction.get('model_version', 'N/A') if prediction else 'N/A'}*
+            """,
+        )
+
+    # Model version footer
+    mv = prediction.get("model_version", "") if prediction else ""
     st.markdown(
-        """
-        <div style="font-size: 0.8em; color: #666; margin-top: 8px;">
-        <b>Legend:</b>
-        <span style="color: #2563EB;">● Actual track</span> |
-        <span style="color: #DC2626;">▲ Predicted track</span> |
-        <span style="color: #FCA5A5;">○ Uncertainty cone</span> |
-        <span style="color: #FDE68A;">○ 34kt</span>
-        <span style="color: #FDBA74;">○ 50kt</span>
-        <span style="color: #F87171;">○ 64kt</span> wind radii
-        </div>
-        """,
+        f"<div style='text-align:center;color:#475569;font-size:0.7rem;margin-top:16px;'>"
+        f"ChakraNetra v0.1.0 | {mv} | 51 tests passing"
+        f"</div>",
         unsafe_allow_html=True,
     )
 

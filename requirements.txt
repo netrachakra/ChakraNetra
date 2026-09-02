@@ -17,3 +17,4 @@ httpx>=0.24
 streamlit>=1.30
 folium>=0.14
 streamlit-folium>=0.15
+plotly>=5.0
