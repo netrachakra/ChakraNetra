@@ -13,5 +13,7 @@ fastapi>=0.100
 uvicorn>=0.20
 httpx>=0.24
 
-# Optional: Dashboard (for other team sprints)
-# streamlit>=1.30
+# Dashboard
+streamlit>=1.30
+folium>=0.14
+streamlit-folium>=0.15
