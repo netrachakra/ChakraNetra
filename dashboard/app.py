@@ -738,7 +738,7 @@ def main():
     c4.metric("Risk Tier", tier_label)
 
     # --- Tabs ---
-    tab_track, tab_risk = st.tabs(["Track & Forecast", "Risk Assessment"])
+    tab_track, tab_risk, tab_accuracy = st.tabs(["Track & Forecast", "Risk Assessment", "Model Accuracy"])
 
     with tab_track:
         # Map row
@@ -835,6 +835,10 @@ def main():
                     f"Population-density weighting is not included in this prototype.</p>",
                     unsafe_allow_html=True,
                 )
+
+    with tab_accuracy:
+        from src.check_accuracy import render_accuracy_tab
+        render_accuracy_tab()
 
     # --- Trust footer ---
     with st.expander("About this model", expanded=False):
