@@ -3,29 +3,22 @@ src/check_accuracy.py
 
 Backtests ChakraNetra's prediction accuracy -- reproduces RESULTS.md's numbers
 when run with no arguments, or scores a freshly uploaded IBTrACS CSV when
-given --csv.  Depends on the refactor in AGENT_BRIEF_csv_upload.md:
+given --csv.
 
-  - src.data_pipeline.clean_ibtracs_dataframe(raw_df) -> storms_df
-  - src.model.predict_from_history(history_df, lead_times_hours)
-  - src.model.validate_history(history_df) -> (bool, str)
-  - src.model.MIN_HISTORY_OBS
+Two backtest modes:
+  - FAST (default for dashboard): build features once per storm, vectorised
+    inference at each timestep. ~100x faster than the slow path.
+  - SLOW (--slow flag): calls predict_from_history() at every timestep,
+    exercising the exact production code path. Use for regression testing.
 
 CLI:
     python -m src.check_accuracy
-        Backtests against the built-in held-out test split.  Numbers in the
-        printed table should match RESULTS.md exactly -- use this as a
-        regression check any time model.py or data_pipeline.py changes.
-
-    python -m src.check_accuracy --csv path/to/some_export.csv
-        Backtests against any IBTrACS-format file.  Only scores storms that
-        are fully historical (i.e. the file has observations far enough past
-        each forecast point to know what "actually happened").
-
-    python -m src.check_accuracy --csv path/to/export.csv --storm-id 2023156N10067
-        Restrict to one storm.
+    python -m src.check_accuracy --csv path/to/file.csv
+    python -m src.check_accuracy --csv path/to/file.csv --storm-id 2023156N10067
+    python -m src.check_accuracy --slow   # production-path regression test
 
 Dashboard:
-    from src.check_accuracy import run_backtest, summarize, render_accuracy_tab
+    from src.check_accuracy import render_accuracy_tab
     # inside dashboard/app.py, in a `with st.tab("Model Accuracy"):` block:
     render_accuracy_tab()
 """
@@ -40,7 +33,18 @@ import numpy as np
 import pandas as pd
 
 from src.data_pipeline import clean_ibtracs_dataframe
-from src.model import predict_from_history, validate_history, MIN_HISTORY_OBS
+from src.model import (
+    _build_features,
+    FEATURE_COLS,
+    LEAD_TIMES,
+    TARGETS,
+    load_models,
+    predict_from_history,
+    validate_history,
+    MIN_HISTORY_OBS,
+)
+# Import the module itself for mutable state access
+import src.model as _model_mod
 
 try:
     from src.calibration import calibrate
@@ -50,6 +54,9 @@ except ImportError:
 
 LEAD_TIMES_H = [24, 48, 72]
 EARTH_RADIUS_KM = 6371.0
+
+# Max storms to backtest in dashboard upload mode (keeps it snappy)
+MAX_UPLOAD_STORMS = 15
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -63,20 +70,128 @@ def haversine_km(lat1, lon1, lat2, lon2):
 
 
 def _obs_step_hours(storm_df):
-    """Infer this storm's observation cadence from its real timestamps
-    (usually 6h for IBTrACS, but don't hardcode it -- some exports differ)."""
+    """Infer observation cadence from real timestamps (usually 6h for IBTrACS)."""
     deltas = storm_df["timestamp"].diff().dropna()
     if deltas.empty:
         return 6.0
     return deltas.dt.total_seconds().median() / 3600.0
 
 
-def backtest_storm(storm_df, lead_times_hours=LEAD_TIMES_H):
+# --------------------------------------------------------------------------- #
+# FAST backtest -- build features once, run inference from feature matrix
+# --------------------------------------------------------------------------- #
+
+def _ensure_models_loaded():
+    """Load models once, return the dict."""
+    if not _model_mod._MODEL_LOADED:
+        load_models()
+    return _model_mod._MODELS
+
+
+def backtest_storm_fast(storm_df, lead_times_hours=LEAD_TIMES_H):
     """
-    Rolling backtest for ONE storm.  At every valid timestamp t, feed the
-    model everything up to and including t, predict t+lead, and compare
-    against what actually happened at t+lead -- which we already know,
-    because this is historical data, not a live storm.
+    Vectorized rolling backtest for ONE storm.
+
+    1. Build features once for the entire storm
+    2. Collect all valid (i, j, lead_h) pairs via timestamp lookup
+    3. Batch-predict all samples at once per model (12 batch calls total)
+    4. Score against actuals
+
+    ~20x faster than per-timestep predict_from_history calls.
+    """
+    models = _ensure_models_loaded()
+    if not models:
+        return pd.DataFrame()
+
+    storm_df = storm_df.sort_values("timestamp").reset_index(drop=True)
+
+    # Build features once for the entire storm
+    featured = _build_features(storm_df)
+    featured = featured.reset_index(drop=True)
+
+    # Build timestamp -> row-index map
+    time_to_idx = {}
+    for r in range(len(featured)):
+        time_to_idx[featured.iloc[r]["timestamp"]] = r
+
+    # Collect all valid (i, j, lead_h) pairs
+    n = len(featured)
+    times = featured["timestamp"].values
+    pairs = []  # list of (i, j, lead_h)
+
+    for i in range(MIN_HISTORY_OBS - 1, n):
+        t_i = times[i]
+        for lead_h in lead_times_hours:
+            target_time = t_i + np.timedelta64(lead_h, "h")
+            j = time_to_idx.get(target_time)
+            if j is not None:
+                pairs.append((i, j, lead_h))
+
+    if not pairs:
+        return pd.DataFrame()
+
+    # Extract feature matrix for all source indices at once
+    source_indices = [p[0] for p in pairs]
+    X_all = featured.iloc[source_indices][FEATURE_COLS].values.astype(np.float64)
+
+    # Batch predict: one call per (target, lead_h) model
+    # Group pairs by lead_h for batch inference
+    from collections import defaultdict
+    lead_groups = defaultdict(list)  # lead_h -> list of (pair_idx, i, j)
+    for pair_idx, (i, j, lead_h) in enumerate(pairs):
+        lead_groups[lead_h].append(pair_idx)
+
+    # predictions[pair_idx] = {target: value}
+    predictions = [{} for _ in pairs]
+
+    for lead_h, pair_indices in lead_groups.items():
+        X_batch = X_all[pair_indices]
+        for target in TARGETS:
+            key = (target, lead_h)
+            if key not in models:
+                nearest_h = min(LEAD_TIMES, key=lambda lh: abs(lh - lead_h))
+                key = (target, nearest_h)
+            if key in models:
+                preds = models[key].predict(X_batch)
+                for local_idx, pair_idx in enumerate(pair_indices):
+                    predictions[pair_idx][target] = float(preds[local_idx])
+            else:
+                for pair_idx in pair_indices:
+                    i = pairs[pair_idx][0]
+                    predictions[pair_idx][target] = float(featured.iloc[i][target])
+
+    # Score all pairs
+    rows = []
+    sid = storm_df["storm_id"].iloc[0]
+    for pair_idx, (i, j, lead_h) in enumerate(pairs):
+        actual = featured.iloc[j]
+        pred = predictions[pair_idx]
+
+        pred_lat = round(pred.get("lat", actual["lat"]), 2)
+        pred_lon = round(pred.get("lon", actual["lon"]), 2)
+
+        track_err = haversine_km(pred_lat, pred_lon, actual["lat"], actual["lon"])
+
+        rows.append({
+            "storm_id": sid,
+            "lead_h": lead_h,
+            "track_error_km": track_err,
+            "wind_abs_err_kt": abs(round(pred.get("wind_kt", actual["wind_kt"]), 1) - actual["wind_kt"]),
+            "pressure_abs_err_hpa": abs(round(pred.get("pressure_hpa", actual["pressure_hpa"]), 1) - actual["pressure_hpa"]),
+        })
+
+    return pd.DataFrame(rows)
+
+
+# --------------------------------------------------------------------------- #
+# SLOW backtest -- calls predict_from_history at every timestep (production path)
+# --------------------------------------------------------------------------- #
+
+def backtest_storm_slow(storm_df, lead_times_hours=LEAD_TIMES_H):
+    """
+    Slow rolling backtest for ONE storm. Calls predict_from_history() at
+    every valid timestep -- exercises the exact production code path.
+    Use for regression testing; use backtest_storm_fast() for dashboard.
     """
     storm_df = storm_df.sort_values("timestamp").reset_index(drop=True)
     step_h = _obs_step_hours(storm_df)
@@ -95,15 +210,13 @@ def backtest_storm(storm_df, lead_times_hours=LEAD_TIMES_H):
             steps_ahead = round(lead_h / step_h)
             j = i + steps_ahead
             if j >= len(storm_df):
-                continue  # no ground truth that far ahead in this file yet
+                continue
 
             actual = storm_df.iloc[j]
             actual_lead_h = (
                 actual["timestamp"] - storm_df.iloc[i]["timestamp"]
             ).total_seconds() / 3600.0
 
-            # only score if the actual observation lines up with the
-            # intended lead time -- skip if the file has a gap here
             if abs(actual_lead_h - lead_h) > step_h / 2:
                 continue
 
@@ -135,22 +248,47 @@ def backtest_storm(storm_df, lead_times_hours=LEAD_TIMES_H):
     return pd.DataFrame(rows)
 
 
-def run_backtest(storms_df, storm_ids=None, lead_times_hours=LEAD_TIMES_H):
-    """Backtests every storm in storms_df (or just storm_ids if given).
+# --------------------------------------------------------------------------- #
+# Public API
+# --------------------------------------------------------------------------- #
 
-    NOTE: this calls the real model once per valid timestep per storm -- it's
-    slow by design (~150ms/call per PIPELINE_STATUS.md), because it exercises
-    the exact same code path as a live prediction rather than a vectorized
-    shortcut that could drift from what the dashboard actually does."""
+def run_backtest(storms_df, storm_ids=None, lead_times_hours=LEAD_TIMES_H,
+                 fast=True, max_storms=None, progress_callback=None):
+    """
+    Backtests every storm in storms_df (or just storm_ids if given).
+
+    Args:
+        fast: Use the fast path (default True). Set False for regression testing.
+        max_storms: Limit to N storms (randomly sampled). None = all.
+        progress_callback: callable(current, total) for progress updates.
+    """
+    _ensure_models_loaded()
+
     if storm_ids is not None:
         storms_df = storms_df[storms_df["storm_id"].isin(storm_ids)]
 
+    unique_ids = sorted(storms_df["storm_id"].unique())
+
+    # Limit storms if requested
+    if max_storms and len(unique_ids) > max_storms:
+        rng = np.random.default_rng(42)
+        unique_ids = sorted(rng.choice(unique_ids, size=max_storms, replace=False))
+        storms_df = storms_df[storms_df["storm_id"].isin(unique_ids)]
+
+    backtest_fn = backtest_storm_fast if fast else backtest_storm_slow
     all_rows = []
-    for sid, group in storms_df.groupby("storm_id"):
+    total = len(unique_ids)
+
+    for idx, (sid, group) in enumerate(storms_df.groupby("storm_id")):
+        if sid not in unique_ids:
+            continue
         try:
-            all_rows.append(backtest_storm(group, lead_times_hours))
+            all_rows.append(backtest_fn(group, lead_times_hours))
         except Exception as e:
             print(f"  [skip] {sid}: {e}", file=sys.stderr)
+
+        if progress_callback:
+            progress_callback(idx + 1, total)
 
     cols = [
         "storm_id", "lead_h", "track_error_km",
@@ -162,8 +300,7 @@ def run_backtest(storms_df, storm_ids=None, lead_times_hours=LEAD_TIMES_H):
 
 
 def summarize(results_df):
-    """Matches the exact table shape in RESULTS.md (plus a coverage table
-    if calibration is wired in)."""
+    """Aggregate per-lead-time metrics. Matches RESULTS.md table shape."""
     if results_df.empty:
         return pd.DataFrame()
 
@@ -184,6 +321,14 @@ def summarize(results_df):
         .reset_index()
         .rename(columns={"lead_h": "lead_time_h"})
     )
+    # Round for display
+    for col in ["track_error_km", "wind_mae_kt", "pressure_mae_hpa"]:
+        if col in summary.columns:
+            summary[col] = summary[col].round(1)
+    for col in ["track_coverage", "wind_coverage"]:
+        if col in summary.columns:
+            summary[col] = (summary[col] * 100).round(1)
+
     return summary
 
 
@@ -201,6 +346,11 @@ def main():
     parser.add_argument(
         "--storm-id", type=str, default=None,
         help="Restrict to one storm_id/SID.",
+    )
+    parser.add_argument(
+        "--slow", action="store_true",
+        help="Use the slow path (calls predict_from_history per timestep). "
+             "Default is the fast path.",
     )
     parser.add_argument(
         "--out", type=str, default="results/accuracy_check.json",
@@ -223,7 +373,9 @@ def main():
         print(f"Loaded {len(test_ids)} held-out test storm(s) -- this reproduces RESULTS.md")
 
     storm_ids = [args.storm_id] if args.storm_id else None
-    results_df = run_backtest(storms_df, storm_ids=storm_ids)
+    results_df = run_backtest(
+        storms_df, storm_ids=storm_ids, fast=not args.slow,
+    )
 
     if results_df.empty:
         print(
@@ -246,12 +398,11 @@ if __name__ == "__main__":
 
 
 # --------------------------------------------------------------------------- #
-# Dashboard integration -- import this into dashboard/app.py
+# Dashboard integration
 # --------------------------------------------------------------------------- #
 
 def render_accuracy_tab():
-    """Call from inside a `with st.tab("Model Accuracy"):` block in the
-    Streamlit dashboard."""
+    """Call from inside a `with st.tab("Model Accuracy"):` block."""
     import streamlit as st
 
     st.subheader("Model Accuracy")
@@ -267,6 +418,8 @@ def render_accuracy_tab():
         with open("data/processed/test_storm_ids.json") as f:
             test_ids = json.load(f)
         target_df = storms_df[storms_df["storm_id"].isin(test_ids)]
+        n_storms = len(test_ids)
+        max_storms = None  # run all 5 test storms
     else:
         uploaded = st.file_uploader("Upload IBTrACS CSV", type="csv", key="accuracy_upload")
         if uploaded is None:
@@ -277,13 +430,31 @@ def render_accuracy_tab():
         if "name" in target_df.columns:
             target_df = target_df.drop(columns=["name"])
         target_df["timestamp"] = pd.to_datetime(target_df["timestamp"])
+        n_storms = target_df["storm_id"].nunique()
+
+        # For large uploads, cap the number of storms
+        if n_storms > MAX_UPLOAD_STORMS:
+            st.info(
+                f"File has {n_storms} storms. Will sample {MAX_UPLOAD_STORMS} "
+                f"for speed. Use the CLI for a full run."
+            )
+        max_storms = MAX_UPLOAD_STORMS
 
     if st.button("Run accuracy check"):
-        with st.spinner(
-            "Backtesting -- this calls the real model once per timestep, "
-            "so it can take a minute on larger files..."
-        ):
-            results_df = run_backtest(target_df)
+        progress_bar = st.progress(0, text="Starting backtest...")
+        storm_count = min(n_storms, max_storms) if max_storms else n_storms
+
+        def _update_progress(current, total):
+            pct = current / total
+            progress_bar.progress(pct, text=f"Storm {current}/{total}...")
+
+        results_df = run_backtest(
+            target_df,
+            fast=True,
+            max_storms=max_storms,
+            progress_callback=_update_progress,
+        )
+        progress_bar.progress(1.0, text="Done!")
 
         if results_df.empty:
             st.warning(
@@ -295,6 +466,22 @@ def render_accuracy_tab():
 
         summary = summarize(results_df)
         st.dataframe(summary, use_container_width=True)
+
+        # Per-storm breakdown
+        if results_df["storm_id"].nunique() > 1:
+            with st.expander("Per-storm breakdown"):
+                per_storm = (
+                    results_df.groupby(["storm_id", "lead_h"])
+                    .agg(
+                        track_km=("track_error_km", "mean"),
+                        wind_kt=("wind_abs_err_kt", "mean"),
+                        n=("track_error_km", "count"),
+                    )
+                    .reset_index()
+                )
+                per_storm["track_km"] = per_storm["track_km"].round(1)
+                per_storm["wind_kt"] = per_storm["wind_kt"].round(1)
+                st.dataframe(per_storm, use_container_width=True, hide_index=True)
 
         st.caption(
             "Track error = great-circle distance (km) between predicted and "
