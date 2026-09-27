@@ -346,12 +346,15 @@ def build_map(storm_df: pd.DataFrame, prediction: dict) -> folium.Map:
     m = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=5,
-        tiles="https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-        attr=(
-            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> '
-            'contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-        ),
+        tiles=None,
     )
+    folium.TileLayer(
+        tiles="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+        attr="OpenStreetMap, CARTO",
+        name="Dark",
+        subdomains="abcd",
+        max_zoom=19,
+    ).add_to(m)
 
     # Actual track segments
     for i in range(len(storm_df) - 1):
@@ -877,39 +880,29 @@ def main():
     n_obs = len(storm_df)
     last_ts = str(storm_df.iloc[-1].get("timestamp", ""))
 
-    # Header strip
+    # Header strip — left side (storm info)
     alert_badges = ""
     if ri_watch:
-        alert_badges += (f'<span style="background:{WARNING};color:#000;padding:2px 10px;'
-                         f'border-radius:4px;font-size:0.68rem;font-weight:700;'
-                         f'margin-left:8px;">RI WATCH</span>')
+        alert_badges += f'<span style="background:{WARNING};color:#000;padding:2px 10px;border-radius:4px;font-size:0.68rem;font-weight:700;margin-left:8px;">RI WATCH</span>'
     if erc_watch:
-        alert_badges += (f'<span style="background:#A855F7;color:#FFF;padding:2px 10px;'
-                         f'border-radius:4px;font-size:0.68rem;font-weight:700;'
-                         f'margin-left:8px;">ERC WATCH</span>')
+        alert_badges += f'<span style="background:#A855F7;color:#FFF;padding:2px 10px;border-radius:4px;font-size:0.68rem;font-weight:700;margin-left:8px;">ERC WATCH</span>'
 
-    st.markdown(f"""
-    <div style="display:flex;align-items:center;justify-content:space-between;
-                padding:10px 0 6px 0;border-bottom:1px solid {BORDER};margin-bottom:12px;">
-        <div style="display:flex;align-items:center;gap:10px;">
-            <span style="font-size:1.1rem;font-weight:700;color:{TEXT_PRIMARY};
-                         font-family:'JetBrains Mono',monospace;">{selected_storm}</span>
-            <span style="background:{cat_color}22;color:{cat_color};padding:2px 10px;
-                         border-radius:4px;font-size:0.72rem;font-weight:600;">{cat} | {peak_wind:.0f} kt</span>
-            <span style="color:{TEXT_MUTED};font-size:0.75rem;">{basin_name}</span>
-            <span style="background:{tier_color}22;color:{tier_color};padding:2px 10px;
-                         border-radius:4px;font-size:0.68rem;font-weight:600;">{tier_label}</span>
-            {alert_badges}
-        </div>
-        <div style="display:flex;align-items:center;gap:16px;">
-            <span style="color:{TEXT_MUTED};font-size:0.68rem;">{n_obs} observations</span>
-            <span style="color:{TEXT_MUTED};font-size:0.68rem;">Last: {last_ts}</span>
-            <span style="display:inline-block;width:6px;height:6px;background:{SUCCESS};
-                         border-radius:50%;"></span>
-            <span style="color:{SUCCESS};font-size:0.65rem;font-weight:500;">SYSTEM OK</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    left_html = (
+        f'<span style="font-size:1.1rem;font-weight:700;color:{TEXT_PRIMARY};font-family:JetBrains Mono,monospace;">{selected_storm}</span>'
+        f' <span style="background:{cat_color}22;color:{cat_color};padding:2px 10px;border-radius:4px;font-size:0.72rem;font-weight:600;">{cat} | {peak_wind:.0f} kt</span>'
+        f' <span style="color:{TEXT_MUTED};font-size:0.75rem;">{basin_name}</span>'
+        f' <span style="background:{tier_color}22;color:{tier_color};padding:2px 10px;border-radius:4px;font-size:0.68rem;font-weight:600;">{tier_label}</span>'
+        f'{alert_badges}'
+    )
+    right_html = (
+        f'<span style="color:{TEXT_MUTED};font-size:0.68rem;">{n_obs} obs</span>'
+        f' <span style="color:{TEXT_MUTED};font-size:0.68rem;">Last: {last_ts}</span>'
+        f' <span style="display:inline-block;width:6px;height:6px;background:{SUCCESS};border-radius:50%;margin-left:6px;"></span>'
+        f' <span style="color:{SUCCESS};font-size:0.65rem;font-weight:500;">ONLINE</span>'
+    )
+    status_html = f'<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0 6px 0;border-bottom:1px solid {BORDER};margin-bottom:12px;"><div>{left_html}</div><div>{right_html}</div></div>'
+    st.markdown(status_html, unsafe_allow_html=True)
+
 
     # ================================================================== #
     # MAP — Hero element, dominant
@@ -917,33 +910,27 @@ def main():
     m = build_map(storm_df, prediction)
     st_folium(m, height=520, use_container_width=True, returned_objects=[])
 
-    # Map legend — compact, inline
-    st.markdown(f"""
-    <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;
-                padding:6px 12px;border-radius:4px;background:{BG_SURFACE};
-                border:1px solid {BORDER};font-size:0.72rem;color:{TEXT_SECONDARY};margin-top:-8px;">
-        <span><span style="display:inline-block;width:14px;height:3px;background:{ACTUAL_TRACK};
-              border-radius:2px;vertical-align:middle;margin-right:4px;"></span>Observed</span>
-        <span><span style="display:inline-block;width:14px;height:0;border-top:2px dashed {PRED_TRACK};
-              vertical-align:middle;margin-right:4px;"></span>Forecast</span>
-        <span><span style="display:inline-block;width:10px;height:10px;background:{CONE_FILL};
-              opacity:0.4;border-radius:50%;vertical-align:middle;margin-right:3px;"></span>Uncertainty</span>
-        <span><span style="display:inline-block;width:8px;height:8px;border:2px solid {WIND_34};
-              border-radius:50%;vertical-align:middle;margin-right:3px;"></span>R34</span>
-        <span><span style="display:inline-block;width:8px;height:8px;border:2px solid {WIND_50};
-              border-radius:50%;vertical-align:middle;margin-right:3px;"></span>R50</span>
-        <span><span style="display:inline-block;width:8px;height:8px;border:2px solid {WIND_64};
-              border-radius:50%;vertical-align:middle;margin-right:3px;"></span>R64</span>
-    </div>
-    """, unsafe_allow_html=True)
+    # Map legend
+    legend_items = (
+        f'<span><span style="display:inline-block;width:14px;height:3px;background:{ACTUAL_TRACK};border-radius:2px;vertical-align:middle;margin-right:4px;"></span>Observed</span>'
+        f' <span><span style="display:inline-block;width:14px;height:0;border-top:2px dashed {PRED_TRACK};vertical-align:middle;margin-right:4px;"></span>Forecast</span>'
+        f' <span><span style="display:inline-block;width:10px;height:10px;background:{CONE_FILL};opacity:0.4;border-radius:50%;vertical-align:middle;margin-right:3px;"></span>Uncertainty</span>'
+        f' <span><span style="display:inline-block;width:8px;height:8px;border:2px solid {WIND_34};border-radius:50%;vertical-align:middle;margin-right:3px;"></span>R34</span>'
+        f' <span><span style="display:inline-block;width:8px;height:8px;border:2px solid {WIND_50};border-radius:50%;vertical-align:middle;margin-right:3px;"></span>R50</span>'
+        f' <span><span style="display:inline-block;width:8px;height:8px;border:2px solid {WIND_64};border-radius:50%;vertical-align:middle;margin-right:3px;"></span>R64</span>'
+    )
+    st.markdown(
+        f'<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:6px 12px;border-radius:4px;background:{BG_SURFACE};border:1px solid {BORDER};font-size:0.72rem;color:{TEXT_SECONDARY};margin-top:-8px;">{legend_items}</div>',
+        unsafe_allow_html=True,
+    )
 
     # ================================================================== #
     # INTELLIGENCE STRIP — 4 compact cards in a row
     # ================================================================== #
-    st.markdown(f"""
-    <div style="color:{TEXT_MUTED};font-size:0.65rem;text-transform:uppercase;
-                letter-spacing:0.1em;margin:16px 0 8px 0;padding-left:2px;">STORM INTELLIGENCE</div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="color:{TEXT_MUTED};font-size:0.65rem;text-transform:uppercase;letter-spacing:0.1em;margin:16px 0 8px 0;padding-left:2px;">STORM INTELLIGENCE</div>',
+        unsafe_allow_html=True,
+    )
 
     ri_data = prediction.get("ri", {}) if prediction else {}
     erc_data = prediction.get("erc", {}) if prediction else {}
