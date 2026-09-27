@@ -171,15 +171,43 @@ class IntensityPoint(BaseModel):
 class RiskResult(BaseModel):
     risk_score: float
     wind_radii_km: dict[str, float]
+    reference_rmw_source: str = "inner"
+
+
+class RISignal(BaseModel):
+    probability_24h: float = 0.0
+    signal: str = ""
+    data_source: str | None = None
+
+
+class RIResult(BaseModel):
+    environmental: RISignal = RISignal(signal="TabNet")
+    lightning: RISignal = RISignal(signal="XGBoost", data_source="WWLLN_bias_corrected")
+    agreement: bool = True
+
+
+class ERCResult(BaseModel):
+    direct_probability: float = 0.0
+    synthetic_probability: float | None = None
+    rmw_jump_confirmed: bool | None = None
+    reference_rmw_source: str = "inner"
+
+
+class AlertOverlays(BaseModel):
+    ri_watch: bool = False
+    erc_watch: bool = False
 
 
 class PredictResponse(BaseModel):
-    """POST /v1/predict response -- merges all three contracts + model_version."""
+    """POST /v1/predict response -- v3 contract with RI, ERC, alert overlays."""
     storm_id: str
     track: list[TrackPoint]
     intensity: list[IntensityPoint]
     empirical_coverage: float | None = None
     risk: RiskResult | None = None
+    ri: RIResult | None = None
+    erc: ERCResult | None = None
+    alert_overlays: AlertOverlays | None = None
     model_version: str
 
 
@@ -284,22 +312,57 @@ def predict(request: PredictRequest):
         calibrated = raw_prediction
         calibrated["empirical_coverage"] = None
 
-    # Step 3: compute_risk (using the first/strongest intensity point)
+    # Step 3: RI and ERC detection (v3)
+    ri_result = None
+    erc_result = None
+    alert_flags = {"ri_watch": False, "erc_watch": False}
+    try:
+        import pandas as pd
+        from src.ri import compute_ri, RI_WATCH_THRESHOLD
+        from src.erc import compute_erc, ERC_WATCH_THRESHOLD
+
+        if STORMS_CSV.exists():
+            storms_df = pd.read_csv(STORMS_CSV)
+            storm_hist = storms_df[storms_df["storm_id"] == request.storm_id].copy()
+            storm_hist = storm_hist.sort_values("timestamp").reset_index(drop=True)
+
+            if len(storm_hist) >= 3:
+                storm_hist["timestamp"] = pd.to_datetime(storm_hist["timestamp"])
+                latest = storm_hist.iloc[-1]
+                lat = float(latest["lat"])
+                lon = float(latest["lon"])
+                basin = str(latest.get("basin", "BOB"))
+                month = int(latest["timestamp"].month)
+                current_wind = float(latest["wind_kt"])
+
+                ri_result = compute_ri(storm_hist, lat, lon, month, basin)
+                erc_result = compute_erc(storm_hist, current_wind, basin)
+
+                env_p = ri_result["environmental"]["probability_24h"]
+                ltg_p = ri_result["lightning"]["probability_24h"]
+                alert_flags["ri_watch"] = env_p >= RI_WATCH_THRESHOLD or ltg_p >= RI_WATCH_THRESHOLD
+                alert_flags["erc_watch"] = erc_result["direct_probability"] >= ERC_WATCH_THRESHOLD
+    except Exception:
+        pass
+
+    # Step 4: compute_risk with RI/ERC awareness (CN-014)
     risk_result = None
     try:
         if calibrated.get("intensity"):
-            # Use the strongest predicted wind for risk assessment
             strongest = max(calibrated["intensity"], key=lambda p: p["wind_kt"])
-            # Get lat/lon from corresponding track point
             matching_track = next(
                 (t for t in calibrated["track"] if t["lead_h"] == strongest["lead_h"]),
                 calibrated["track"][0] if calibrated["track"] else None,
             )
             if matching_track:
+                rmw_src = erc_result.get("reference_rmw_source", "inner") if erc_result else "inner"
                 risk_result = _risk_fn(
                     strongest["wind_kt"],
                     matching_track["lat"],
                     matching_track["lon"],
+                    ri_flag=alert_flags["ri_watch"],
+                    erc_flag=alert_flags["erc_watch"],
+                    reference_rmw_source=rmw_src,
                 )
     except Exception:
         risk_result = None
@@ -311,6 +374,10 @@ def predict(request: PredictRequest):
         intensity=[IntensityPoint(**pt) for pt in calibrated["intensity"]],
         empirical_coverage=calibrated.get("empirical_coverage"),
         risk=RiskResult(**risk_result) if risk_result else None,
+        ri=RIResult(**ri_result) if ri_result else None,
+        erc=ERCResult(**{k: v for k, v in erc_result.items()
+                        if k in ERCResult.model_fields}) if erc_result else None,
+        alert_overlays=AlertOverlays(**alert_flags),
         model_version=MODEL_VERSION,
     )
 

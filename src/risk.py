@@ -192,41 +192,63 @@ def _wind_risk_score(vmax_kt: float) -> float:
 # compute_risk() -- CONTRACT.md Function Contract 3
 # --------------------------------------------------------------------------- #
 
-def compute_risk(intensity_kt: float, lat: float, lon: float) -> dict:
+def compute_risk(intensity_kt: float, lat: float, lon: float,
+                 ri_flag: bool = False, erc_flag: bool = False,
+                 reference_rmw_source: str = "inner") -> dict:
     """
     Compute wind-based risk score and wind radii for a cyclone.
 
-    Per CONTRACT.md:
+    v3 update (CN-014): accepts reference_rmw_source and RI/ERC flags.
+
+    Per CONTRACT.md + v3 Appendix B:
         {
             "risk_score": float,     # 0.0 to 1.0
             "wind_radii_km": {
                 "34kt": float,
                 "50kt": float,
                 "64kt": float,
-            }
+            },
+            "reference_rmw_source": "inner" | "outer",
         }
 
     Args:
         intensity_kt: Maximum sustained wind speed in knots.
-        lat: Latitude of the storm center (currently unused; reserved
-             for future population-density weighting).
-        lon: Longitude of the storm center (currently unused; reserved
-             for future population-density weighting).
+        lat: Latitude of the storm center (reserved for population weighting).
+        lon: Longitude of the storm center (reserved for population weighting).
+        ri_flag: True if RI WATCH is active (storm may rapidly strengthen).
+        erc_flag: True if ERC WATCH is active (wind area expanding).
+        reference_rmw_source: "inner" (default) or "outer" (during ERC,
+            switches to outer eyewall so risk map reflects the widening
+            destructive-wind radius even while wind speed is dropping).
 
     Returns:
-        Risk assessment dict per CONTRACT.md.
+        Risk assessment dict per CONTRACT.md + v3 extensions.
     """
-    # lat, lon are accepted per contract but not used for risk weighting
-    # in this sprint. Population-density weighting is out of scope.
     _ = lat, lon
 
     rmw = estimate_rmw_km(intensity_kt)
+
+    # CN-014: During ERC, switch reference radius to outer eyewall.
+    # Outer eyewall is typically 1.5-2.5x the inner RMW.
+    if reference_rmw_source == "outer":
+        rmw = rmw * 1.8
+
     radii = compute_wind_radii(intensity_kt, rmw)
     score = _wind_risk_score(intensity_kt)
+
+    # v3 SS7.1: RI and ERC flags boost risk because they predict
+    # what's ABOUT TO HAPPEN, not what's currently measured.
+    if ri_flag:
+        score = min(1.0, score + 0.12)
+    if erc_flag:
+        score = min(1.0, score + 0.08)
+
+    score = round(score, 4)
 
     return {
         "risk_score": score,
         "wind_radii_km": radii,
+        "reference_rmw_source": reference_rmw_source,
     }
 
 
