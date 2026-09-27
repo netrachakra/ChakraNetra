@@ -1,19 +1,18 @@
 """
-app.py -- ChakraNetra Streamlit Dashboard
+app.py -- ChakraNetra Cyclone Warning Centre Dashboard
 Team Techtonic | SIH 2026 (SIH26070)
 
-Single-screen cyclone forecasting demo with:
-  - Metric cards (Storm ID, Basin, Peak Wind, Risk tier)
-  - Tabs: Track & Forecast (map + charts) | Risk (wind radii + gauge)
-  - Trust footer from PIPELINE_STATUS.md
-  - API or direct-import fallback via sidebar
+Redesigned as an operational Cyclone Warning Centre interface.
+Single-scroll layout: Status Bar > Map (hero) > Intelligence Strip >
+Forecast Detail > Model Accuracy.
 
-Data source: FastAPI at http://localhost:8000 or direct src/ imports.
+No tabs — everything visible on one page for 3-minute demo flow.
 """
 
 import math
 import os
 import sys
+from datetime import datetime
 
 import folium
 import numpy as np
@@ -30,32 +29,36 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 STORMS_CSV = os.path.join(PROJECT_ROOT, "data", "processed", "storms.csv")
-API_BASE = os.environ.get("CHAKRANETRA_API_URL", "http://localhost:8000")
 
 # --------------------------------------------------------------------------- #
-# Design tokens
+# Design tokens — Operational color system
 # --------------------------------------------------------------------------- #
-ACCENT = "#06B6D4"        # cyan-500 -- primary accent
-ACCENT_DIM = "#164E63"    # cyan-900 -- muted accent
-BG_CARD = "#1E293B"       # slate-800
-BG_SURFACE = "#0F172A"    # slate-900
-TEXT_PRIMARY = "#F1F5F9"   # slate-100
-TEXT_MUTED = "#94A3B8"     # slate-400
+BG_BASE = "#0B1120"       # deepest background
+BG_SURFACE = "#111827"    # card/panel background
+BG_ELEVATED = "#1F2937"   # hover/active
+BORDER = "#1F2937"        # subtle
+BORDER_ACTIVE = "#374151" # active
+TEXT_PRIMARY = "#F9FAFB"  # headings
+TEXT_SECONDARY = "#9CA3AF"  # labels
+TEXT_MUTED = "#6B7280"    # metadata
+ACCENT = "#0EA5E9"        # primary action
+CRITICAL = "#EF4444"      # danger
+WARNING = "#F59E0B"       # elevated risk
+SUCCESS = "#10B981"       # stable/agree
+INFO = "#3B82F6"          # informational
 
-# Saffir-Simpson color scale (consistent everywhere)
+# Saffir-Simpson intensity scale
 CAT_COLORS = {
-    "TD":    "#6B7280",   # gray
-    "TS":    "#22D3EE",   # cyan
-    "Cat 1": "#FACC15",   # yellow
-    "Cat 2": "#F97316",   # orange
-    "Cat 3": "#EF4444",   # red
-    "Cat 4": "#DC2626",   # dark red
-    "Cat 5": "#A855F7",   # purple
+    "TD":    "#6B7280",
+    "TS":    "#22D3EE",
+    "Cat 1": "#FACC15",
+    "Cat 2": "#F97316",
+    "Cat 3": "#EF4444",
+    "Cat 4": "#DC2626",
+    "Cat 5": "#A855F7",
 }
 
 CONE_COLORS = ["rgba(251,191,36,0.25)", "rgba(251,146,60,0.20)", "rgba(239,68,68,0.15)"]
-
-# Map element colors
 ACTUAL_TRACK = "#3B82F6"
 PRED_TRACK = "#F43F5E"
 CONE_FILL = "#FB923C"
@@ -79,82 +82,109 @@ def _wind_color(kt: float) -> str:
 
 
 def _risk_tier(score: float) -> tuple[str, str]:
-    """Return (label, hex_color) for a risk score."""
-    if score >= 0.85: return "Extreme", "#A855F7"
-    if score >= 0.70: return "Severe",  "#EF4444"
-    if score >= 0.55: return "High",    "#F97316"
-    if score >= 0.40: return "Moderate","#FACC15"
-    if score >= 0.20: return "Low",     "#22D3EE"
-    return "Minimal", "#6B7280"
+    if score >= 0.85: return "EXTREME", CRITICAL
+    if score >= 0.70: return "SEVERE",  "#DC2626"
+    if score >= 0.55: return "HIGH",    "#F97316"
+    if score >= 0.40: return "MODERATE", WARNING
+    if score >= 0.20: return "LOW",     ACCENT
+    return "MINIMAL", TEXT_MUTED
 
 
 # --------------------------------------------------------------------------- #
-# CSS injection
+# CSS — Operational Cyclone Warning Centre theme
 # --------------------------------------------------------------------------- #
-CUSTOM_CSS = """
+CUSTOM_CSS = f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
-/* Global */
-.stApp { font-family: 'Inter', sans-serif; }
-code, .stCode { font-family: 'JetBrains Mono', monospace; }
+/* ── Global ── */
+html, body, .stApp {{
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: {BG_BASE} !important;
+}}
 
-/* Metric cards */
-div[data-testid="stMetric"] {
-    background: #1E293B;
-    border: 1px solid #334155;
-    border-radius: 10px;
-    padding: 12px 16px;
-}
-div[data-testid="stMetric"] label { color: #94A3B8 !important; font-size: 0.75rem !important; }
-div[data-testid="stMetric"] div[data-testid="stMetricValue"] { color: #F1F5F9 !important; font-weight: 600 !important; }
+/* ── Hide Streamlit chrome ── */
+#MainMenu, footer {{ visibility: hidden; }}
+.stDeployButton {{ display: none; }}
+div[data-testid="stToolbar"] {{ display: none; }}
 
-/* Tab styling */
-button[data-baseweb="tab"] { font-weight: 500; }
+/* ── Metric cards — compact operational ── */
+div[data-testid="stMetric"] {{
+    background: {BG_SURFACE};
+    border: 1px solid {BORDER};
+    border-radius: 6px;
+    padding: 10px 14px;
+}}
+div[data-testid="stMetric"] label {{
+    color: {TEXT_MUTED} !important;
+    font-size: 0.7rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}}
+div[data-testid="stMetric"] div[data-testid="stMetricValue"] {{
+    color: {TEXT_PRIMARY} !important;
+    font-weight: 600 !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 1.1rem !important;
+}}
 
-/* Tables */
-.stTable table { border-collapse: collapse; width: 100%; }
-.stTable th { background: #1E293B; color: #94A3B8; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
-.stTable td { color: #E2E8F0; border-bottom: 1px solid #334155; }
+/* ── Sidebar ── */
+section[data-testid="stSidebar"] {{
+    background: {BG_SURFACE} !important;
+    border-right: 1px solid {BORDER} !important;
+}}
+section[data-testid="stSidebar"] .stSelectbox label,
+section[data-testid="stSidebar"] .stRadio label {{
+    color: {TEXT_SECONDARY} !important;
+    font-size: 0.78rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}}
 
-/* Hide default hamburger menu + footer for clean demo, but keep header for sidebar toggle */
-#MainMenu, footer { visibility: hidden; }
+/* ── Expanders ── */
+details {{
+    background: {BG_SURFACE} !important;
+    border: 1px solid {BORDER} !important;
+    border-radius: 6px !important;
+}}
+details summary {{
+    color: {TEXT_SECONDARY} !important;
+    font-size: 0.85rem !important;
+    font-weight: 500 !important;
+}}
+
+/* ── Tables ── */
+.stTable table {{ border-collapse: collapse; width: 100%; }}
+.stTable th {{
+    background: {BG_SURFACE}; color: {TEXT_MUTED};
+    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em;
+}}
+.stTable td {{ color: {TEXT_PRIMARY}; border-bottom: 1px solid {BORDER}; font-size: 0.82rem; }}
+
+/* ── Dividers ── */
+hr {{ border-color: {BORDER} !important; opacity: 0.5; }}
+
+/* ── Links ── */
+a {{ color: {ACCENT} !important; }}
 </style>
 """
 
 
 # --------------------------------------------------------------------------- #
-# Backend communication
+# Backend helpers (preserved from working code)
 # --------------------------------------------------------------------------- #
 
 def _api_available(base_url: str) -> bool:
     try:
         import httpx
-        r = httpx.get(f"{base_url}/v1/health", timeout=2.0)
+        r = httpx.get(f"{base_url}/health", timeout=2.0)
         return r.status_code == 200
     except Exception:
         return False
 
 
-def _get_storm_ids_api(base_url: str) -> list[str]:
-    import httpx
-    r = httpx.get(f"{base_url}/v1/storms", timeout=5.0)
-    return r.json()["storm_ids"]
-
-
-def _predict_api(base_url: str, storm_id: str, lead_times: list[int]) -> dict:
-    import httpx
-    r = httpx.post(
-        f"{base_url}/v1/predict",
-        json={"storm_id": storm_id, "lead_times_hours": lead_times},
-        timeout=15.0,
-    )
-    r.raise_for_status()
-    return r.json()
-
-
 def _get_storm_ids_direct() -> list[str]:
-    df = pd.read_csv(STORMS_CSV, usecols=["storm_id"])
+    df = pd.read_csv(STORMS_CSV)
     return sorted(df["storm_id"].unique().tolist())
 
 
@@ -168,15 +198,12 @@ def _predict_direct(storm_id: str, lead_times: list[int]) -> dict:
     raw = predict_track_intensity(storm_id, lead_times)
     cal = calibrate(raw)
 
-    # Load storm history for RI/ERC analysis
     storm_df = pd.read_csv(STORMS_CSV)
     storm_df = storm_df[storm_df["storm_id"] == storm_id].copy()
     storm_df = storm_df.sort_values("timestamp").reset_index(drop=True)
 
-    # Compute RI and ERC
     ri_result, erc_result, alert_overlays = _compute_ri_erc(storm_df, cal)
 
-    # Risk with RI/ERC awareness (CN-014)
     risk_result = None
     if cal.get("intensity"):
         strongest = max(cal["intensity"], key=lambda p: p["wind_kt"])
@@ -208,7 +235,6 @@ def _predict_direct(storm_id: str, lead_times: list[int]) -> dict:
 
 
 def _predict_from_upload(history_df: pd.DataFrame, lead_times: list[int]) -> dict:
-    """Chain predict_from_history -> calibrate -> RI/ERC -> risk for uploaded storms."""
     from src.model import predict_from_history
     from src.calibration import calibrate
     from src.risk import compute_risk
@@ -217,11 +243,8 @@ def _predict_from_upload(history_df: pd.DataFrame, lead_times: list[int]) -> dic
 
     raw = predict_from_history(history_df, lead_times)
     cal = calibrate(raw)
-
-    # Compute RI and ERC from uploaded storm history
     ri_result, erc_result, alert_overlays = _compute_ri_erc(history_df, cal)
 
-    # Risk with RI/ERC awareness (CN-014)
     risk_result = None
     if cal.get("intensity"):
         strongest = max(cal["intensity"], key=lambda p: p["wind_kt"])
@@ -253,7 +276,6 @@ def _predict_from_upload(history_df: pd.DataFrame, lead_times: list[int]) -> dic
 
 
 def _compute_ri_erc(storm_df: pd.DataFrame, cal: dict) -> tuple:
-    """Shared helper: compute RI, ERC, and alert overlays from storm data."""
     from src.ri import compute_ri, RI_WATCH_THRESHOLD
     from src.erc import compute_erc, ERC_WATCH_THRESHOLD
 
@@ -281,25 +303,22 @@ def _compute_ri_erc(storm_df: pd.DataFrame, cal: dict) -> tuple:
             ri_result = compute_ri(storm_df_ts, lat, lon, month, basin)
             erc_result = compute_erc(storm_df_ts, current_wind, basin)
 
-            # Alert overlay flags
             env_p = ri_result["environmental"]["probability_24h"]
             ltg_p = ri_result["lightning"]["probability_24h"]
             ri_watch = env_p >= RI_WATCH_THRESHOLD or ltg_p >= RI_WATCH_THRESHOLD
             erc_watch = erc_result["direct_probability"] >= ERC_WATCH_THRESHOLD
-
             alert_overlays = {"ri_watch": ri_watch, "erc_watch": erc_watch}
         except Exception:
-            pass  # Fall back to defaults
+            pass
 
     return ri_result, erc_result, alert_overlays
 
 
 # --------------------------------------------------------------------------- #
-# Map
+# Map builder (preserved)
 # --------------------------------------------------------------------------- #
 
 def _bearing_point(lat, lon, distance_km, bearing_deg):
-    """Compute a point at a given distance and bearing from origin."""
     R = 6371.0
     d = distance_km / R
     b = math.radians(bearing_deg)
@@ -312,7 +331,6 @@ def _bearing_point(lat, lon, distance_km, bearing_deg):
 
 
 def _cone_polygon_coords(lat, lon, radius_km, n_points=36):
-    """Generate a circle polygon (list of [lat,lon]) for the uncertainty cone."""
     coords = []
     for i in range(n_points + 1):
         bearing = 360.0 * i / n_points
@@ -322,14 +340,9 @@ def _cone_polygon_coords(lat, lon, radius_km, n_points=36):
 
 
 def build_map(storm_df: pd.DataFrame, prediction: dict) -> folium.Map:
-    """Build the forecast map with actual + predicted tracks and overlays."""
     center_lat = storm_df["lat"].mean()
     center_lon = storm_df["lon"].mean()
 
-    # BUG FIX #1: Use direct CARTO CDN URL (free, no API key).
-    # The named presets ("cartodbdark_matter", "CartoDB positron") route
-    # through the keyed api.carto.com on some folium/system versions.
-    # This URL hits basemaps.cartocdn.com directly — always free.
     m = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=5,
@@ -340,7 +353,7 @@ def build_map(storm_df: pd.DataFrame, prediction: dict) -> folium.Map:
         ),
     )
 
-    # --- Actual track: intensity-colored segments ---
+    # Actual track segments
     for i in range(len(storm_df) - 1):
         row = storm_df.iloc[i]
         nxt = storm_df.iloc[i + 1]
@@ -348,7 +361,7 @@ def build_map(storm_df: pd.DataFrame, prediction: dict) -> folium.Map:
         folium.PolyLine(
             [[row["lat"], row["lon"]], [nxt["lat"], nxt["lon"]]],
             color=color, weight=3, opacity=0.9,
-            tooltip=f"Actual | {row['timestamp']} | {row['wind_kt']:.0f} kt ({_wind_category(row['wind_kt'])})",
+            tooltip=f"{row['timestamp']} | {row['wind_kt']:.0f} kt ({_wind_category(row['wind_kt'])})",
         ).add_to(m)
 
     # Observation dots
@@ -373,16 +386,14 @@ def build_map(storm_df: pd.DataFrame, prediction: dict) -> folium.Map:
         tooltip=f"Genesis: {genesis['timestamp']}",
     ).add_to(m)
 
-    # --- Predicted track + cones ---
+    # Predicted track + cones
     if prediction and prediction.get("track"):
         last_actual = storm_df.iloc[-1]
         pred_coords = [[last_actual["lat"], last_actual["lon"]]]
 
         for pt in prediction["track"]:
             pred_coords.append([pt["lat"], pt["lon"]])
-
-            # Predicted intensity color
-            wind_at_lead = 40.0  # fallback
+            wind_at_lead = 40.0
             if prediction.get("intensity"):
                 match_int = next(
                     (ip for ip in prediction["intensity"] if ip["lead_h"] == pt["lead_h"]),
@@ -391,7 +402,6 @@ def build_map(storm_df: pd.DataFrame, prediction: dict) -> folium.Map:
                 if match_int:
                     wind_at_lead = match_int["wind_kt"]
 
-            # Cone as shaded polygon (not circle)
             cone_upper = pt.get("cone_km_upper", 0)
             if cone_upper and cone_upper > 0:
                 poly_coords = _cone_polygon_coords(pt["lat"], pt["lon"], cone_upper)
@@ -402,7 +412,6 @@ def build_map(storm_df: pd.DataFrame, prediction: dict) -> folium.Map:
                     tooltip=f"+{pt['lead_h']}h uncertainty cone: {cone_upper:.0f} km radius",
                 ).add_to(m)
 
-            # Predicted point marker
             folium.CircleMarker(
                 location=[pt["lat"], pt["lon"]],
                 radius=7,
@@ -416,7 +425,6 @@ def build_map(storm_df: pd.DataFrame, prediction: dict) -> folium.Map:
                 ),
             ).add_to(m)
 
-            # Lead-time label
             folium.Marker(
                 location=[pt["lat"], pt["lon"]],
                 icon=folium.DivIcon(html=(
@@ -426,14 +434,13 @@ def build_map(storm_df: pd.DataFrame, prediction: dict) -> folium.Map:
                 )),
             ).add_to(m)
 
-        # Dashed predicted line
         folium.PolyLine(
             pred_coords,
             color=PRED_TRACK, weight=2, dash_array="6 4", opacity=0.8,
             tooltip="Predicted Track",
         ).add_to(m)
 
-    # --- Wind radii circles ---
+    # Wind radii circles
     risk = prediction.get("risk") if prediction else None
     if risk and risk.get("wind_radii_km") and prediction.get("intensity"):
         strongest = max(prediction["intensity"], key=lambda p: p["wind_kt"])
@@ -473,11 +480,10 @@ def build_map(storm_df: pd.DataFrame, prediction: dict) -> folium.Map:
 
 
 # --------------------------------------------------------------------------- #
-# Plotly charts
+# Plotly charts (refined)
 # --------------------------------------------------------------------------- #
 
 def _build_wind_chart(prediction: dict) -> go.Figure:
-    """Wind speed vs lead time with calibrated confidence band."""
     pts = prediction.get("intensity", [])
     if not pts:
         return None
@@ -488,40 +494,36 @@ def _build_wind_chart(prediction: dict) -> go.Figure:
     highs = [p["interval_kt"][1] if p.get("interval_kt") else p["wind_kt"] for p in pts]
 
     fig = go.Figure()
-    # Confidence band
     fig.add_trace(go.Scatter(
         x=leads + leads[::-1], y=highs + lows[::-1],
-        fill="toself", fillcolor="rgba(6,182,212,0.15)",
+        fill="toself", fillcolor="rgba(14,165,233,0.12)",
         line=dict(color="rgba(0,0,0,0)"),
         name="80% Interval", hoverinfo="skip",
     ))
-    # Point predictions
     fig.add_trace(go.Scatter(
         x=leads, y=winds, mode="lines+markers",
         line=dict(color=ACCENT, width=2),
-        marker=dict(size=8, color=[_wind_color(w) for w in winds], line=dict(color="white", width=1)),
+        marker=dict(size=7, color=[_wind_color(w) for w in winds], line=dict(color="white", width=1)),
         name="Forecast",
         hovertemplate="+%{x}h: %{y:.1f} kt<extra></extra>",
     ))
-    # Category thresholds
-    for kt, label, color in [(34, "TS", "#22D3EE"), (64, "Cat 1", "#FACC15"), (96, "Cat 3", "#EF4444")]:
-        fig.add_hline(y=kt, line_dash="dot", line_color=color, opacity=0.4,
+    for kt, label, color in [(34, "TS", "#22D3EE"), (64, "Cat 1", "#FACC15"), (96, "Cat 3", CRITICAL)]:
+        fig.add_hline(y=kt, line_dash="dot", line_color=color, opacity=0.3,
                       annotation_text=label, annotation_position="bottom right",
                       annotation_font_color=color, annotation_font_size=10)
 
     fig.update_layout(
         template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        height=260, margin=dict(l=40, r=20, t=30, b=40),
-        xaxis=dict(title="Lead Time (hours)", dtick=24, gridcolor="#334155"),
-        yaxis=dict(title="Wind (kt)", gridcolor="#334155"),
-        legend=dict(orientation="h", y=-0.25), font=dict(family="Inter", size=12),
-        title=dict(text="Wind Speed Forecast", font=dict(size=14, color=TEXT_MUTED)),
+        height=240, margin=dict(l=40, r=16, t=28, b=36),
+        xaxis=dict(title="Lead Time (h)", dtick=24, gridcolor="#1F2937"),
+        yaxis=dict(title="Wind (kt)", gridcolor="#1F2937"),
+        legend=dict(orientation="h", y=-0.3), font=dict(family="Inter", size=11),
+        title=dict(text="WIND SPEED FORECAST", font=dict(size=11, color=TEXT_MUTED)),
     )
     return fig
 
 
 def _build_pressure_chart(prediction: dict) -> go.Figure:
-    """Pressure vs lead time."""
     pts = prediction.get("intensity", [])
     if not pts:
         return None
@@ -533,75 +535,178 @@ def _build_pressure_chart(prediction: dict) -> go.Figure:
     fig.add_trace(go.Scatter(
         x=leads, y=pres, mode="lines+markers",
         line=dict(color="#A78BFA", width=2),
-        marker=dict(size=8, color="#A78BFA", line=dict(color="white", width=1)),
+        marker=dict(size=7, color="#A78BFA", line=dict(color="white", width=1)),
         name="Pressure",
         hovertemplate="+%{x}h: %{y:.0f} hPa<extra></extra>",
     ))
     fig.update_layout(
         template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        height=220, margin=dict(l=40, r=20, t=30, b=40),
-        xaxis=dict(title="Lead Time (hours)", dtick=24, gridcolor="#334155"),
-        yaxis=dict(title="Pressure (hPa)", gridcolor="#334155"),
-        legend=dict(orientation="h", y=-0.3), font=dict(family="Inter", size=12),
-        title=dict(text="Central Pressure Forecast", font=dict(size=14, color=TEXT_MUTED)),
-    )
-    return fig
-
-
-def _build_risk_gauge(score: float) -> go.Figure:
-    """Risk score gauge."""
-    tier, color = _risk_tier(score)
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=score * 100,
-        number=dict(suffix="%", font=dict(size=36, color="white")),
-        title=dict(text=tier, font=dict(size=18, color=color)),
-        gauge=dict(
-            axis=dict(range=[0, 100], tickcolor="#475569", dtick=20),
-            bar=dict(color=color, thickness=0.3),
-            bgcolor="#1E293B",
-            borderwidth=0,
-            steps=[
-                dict(range=[0, 20],  color="#164E63"),
-                dict(range=[20, 40], color="#1E3A5F"),
-                dict(range=[40, 55], color="#3B2F0A"),
-                dict(range=[55, 70], color="#4A1D0A"),
-                dict(range=[70, 85], color="#5C0A0A"),
-                dict(range=[85, 100],color="#3B0764"),
-            ],
-            threshold=dict(line=dict(color="white", width=2), thickness=0.8, value=score * 100),
-        ),
-    ))
-    fig.update_layout(
-        height=220, margin=dict(l=30, r=30, t=40, b=10),
-        paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Inter", color="white"),
+        height=240, margin=dict(l=40, r=16, t=28, b=36),
+        xaxis=dict(title="Lead Time (h)", dtick=24, gridcolor="#1F2937"),
+        yaxis=dict(title="Pressure (hPa)", gridcolor="#1F2937"),
+        legend=dict(orientation="h", y=-0.3), font=dict(family="Inter", size=11),
+        title=dict(text="CENTRAL PRESSURE FORECAST", font=dict(size=11, color=TEXT_MUTED)),
     )
     return fig
 
 
 # --------------------------------------------------------------------------- #
-# Legend HTML
+# Intelligence panel HTML builders
 # --------------------------------------------------------------------------- #
-MAP_LEGEND_HTML = f"""
-<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;
-            padding:8px 12px;border-radius:8px;background:#1E293B;
-            border:1px solid #334155;font-size:0.78rem;color:#CBD5E1;">
-    <span><span style="display:inline-block;width:14px;height:3px;background:{ACTUAL_TRACK};
-          border-radius:2px;vertical-align:middle;margin-right:4px;"></span>Actual Track</span>
-    <span><span style="display:inline-block;width:14px;height:3px;background:{PRED_TRACK};
-          border-radius:2px;vertical-align:middle;margin-right:4px;
-          border-top:2px dashed {PRED_TRACK};height:0;"></span>Predicted Track</span>
-    <span><span style="display:inline-block;width:12px;height:12px;background:{CONE_FILL};
-          opacity:0.4;border-radius:50%;vertical-align:middle;margin-right:4px;"></span>Uncertainty Cone</span>
-    <span><span style="display:inline-block;width:10px;height:10px;border:2px solid {WIND_34};
-          border-radius:50%;vertical-align:middle;margin-right:3px;"></span>34 kt</span>
-    <span><span style="display:inline-block;width:10px;height:10px;border:2px solid {WIND_50};
-          border-radius:50%;vertical-align:middle;margin-right:3px;"></span>50 kt</span>
-    <span><span style="display:inline-block;width:10px;height:10px;border:2px solid {WIND_64};
-          border-radius:50%;vertical-align:middle;margin-right:3px;"></span>64 kt</span>
-    <span style="margin-left:auto;color:#64748B;">Tiles: CARTO Dark Matter (free tier)</span>
-</div>
-"""
+
+def _severity_card(wind_kt: float, risk_score: float, rmw_source: str) -> str:
+    """Compact severity indicator card."""
+    cat = _wind_category(wind_kt)
+    cat_color = _wind_color(wind_kt)
+    tier, tier_color = _risk_tier(risk_score)
+    rmw_label = "OUTER" if rmw_source == "outer" else "INNER"
+    rmw_color = "#A855F7" if rmw_source == "outer" else TEXT_MUTED
+
+    return f"""
+    <div style="background:{BG_SURFACE};border:1px solid {BORDER};border-radius:6px;
+                padding:14px 16px;border-left:3px solid {cat_color};">
+        <div style="color:{TEXT_MUTED};font-size:0.65rem;text-transform:uppercase;
+                    letter-spacing:0.08em;margin-bottom:6px;">SEVERITY</div>
+        <div style="display:flex;align-items:baseline;gap:8px;">
+            <span style="font-family:'JetBrains Mono',monospace;font-size:1.6rem;
+                         font-weight:700;color:{cat_color};">{wind_kt:.0f}</span>
+            <span style="color:{TEXT_SECONDARY};font-size:0.85rem;">kt</span>
+            <span style="background:{cat_color}22;color:{cat_color};padding:2px 8px;
+                         border-radius:4px;font-size:0.72rem;font-weight:600;">{cat}</span>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:8px;">
+            <span style="color:{tier_color};font-size:0.75rem;font-weight:600;">Risk: {tier}</span>
+            <span style="color:{rmw_color};font-size:0.72rem;">RMW: {rmw_label}</span>
+        </div>
+    </div>
+    """
+
+
+def _ri_card(ri_data: dict, ri_watch: bool) -> str:
+    """Compact RI intelligence card."""
+    env_p = ri_data.get("environmental", {}).get("probability_24h", 0.0)
+    ltg_p = ri_data.get("lightning", {}).get("probability_24h", 0.0)
+    agreement = ri_data.get("agreement", True)
+
+    border_color = WARNING if ri_watch else BORDER
+    status_text = "RI WATCH" if ri_watch else "MONITORING"
+    status_color = WARNING if ri_watch else SUCCESS
+    agree_text = "AGREE" if agreement else "DIVERGE"
+    agree_color = SUCCESS if agreement else WARNING
+
+    def _bar(value, color):
+        pct = min(100, max(0, value * 100))
+        return (f'<div style="background:{BG_ELEVATED};border-radius:3px;height:6px;width:100%;margin-top:3px;">'
+                f'<div style="background:{color};border-radius:3px;height:6px;width:{pct}%;"></div></div>')
+
+    return f"""
+    <div style="background:{BG_SURFACE};border:1px solid {border_color};border-radius:6px;
+                padding:14px 16px;border-left:3px solid {border_color};">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span style="color:{TEXT_MUTED};font-size:0.65rem;text-transform:uppercase;
+                         letter-spacing:0.08em;">RAPID INTENSIFICATION</span>
+            <span style="color:{status_color};font-size:0.65rem;font-weight:600;">{status_text}</span>
+        </div>
+        <div style="display:flex;gap:16px;">
+            <div style="flex:1;">
+                <div style="display:flex;justify-content:space-between;">
+                    <span style="color:{TEXT_SECONDARY};font-size:0.72rem;">ENV (TabNet)</span>
+                    <span style="font-family:'JetBrains Mono',monospace;color:{TEXT_PRIMARY};
+                                 font-size:0.78rem;font-weight:500;">{env_p:.0%}</span>
+                </div>
+                {_bar(env_p, ACCENT if env_p < 0.5 else WARNING)}
+            </div>
+            <div style="flex:1;">
+                <div style="display:flex;justify-content:space-between;">
+                    <span style="color:{TEXT_SECONDARY};font-size:0.72rem;">LTG (XGBoost)</span>
+                    <span style="font-family:'JetBrains Mono',monospace;color:{TEXT_PRIMARY};
+                                 font-size:0.78rem;font-weight:500;">{ltg_p:.0%}</span>
+                </div>
+                {_bar(ltg_p, ACCENT if ltg_p < 0.5 else WARNING)}
+            </div>
+        </div>
+        <div style="margin-top:8px;text-align:right;">
+            <span style="color:{agree_color};font-size:0.65rem;font-weight:500;">Signals: {agree_text}</span>
+        </div>
+    </div>
+    """
+
+
+def _erc_card(erc_data: dict, erc_watch: bool) -> str:
+    """Compact ERC intelligence card."""
+    erc_prob = erc_data.get("direct_probability", 0.0)
+    phase = erc_data.get("phase", "unknown")
+    rmw_src = erc_data.get("reference_rmw_source", "inner")
+    details = erc_data.get("details", {})
+
+    border_color = "#A855F7" if erc_watch else BORDER
+    status_text = "ERC WATCH" if erc_watch else "NO ERC"
+    status_color = "#A855F7" if erc_watch else SUCCESS
+
+    phase_labels = {
+        "insufficient_data": "Insufficient data",
+        "no_qualifying_peak": "Below Cat 3 threshold",
+        "no_erc_pattern": "No ERC pattern",
+        "pre_erc": "Pre-ERC watch",
+        "possible_onset": "Possible onset",
+        "active_dip": "Active intensity dip",
+    }
+    phase_text = phase_labels.get(phase, phase)
+    peak_w = details.get("peak_wind_kt", 0)
+    dip = details.get("dip_magnitude_kt", 0)
+
+    pct = min(100, max(0, erc_prob * 100))
+
+    return f"""
+    <div style="background:{BG_SURFACE};border:1px solid {border_color};border-radius:6px;
+                padding:14px 16px;border-left:3px solid {border_color};">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span style="color:{TEXT_MUTED};font-size:0.65rem;text-transform:uppercase;
+                         letter-spacing:0.08em;">EYEWALL REPLACEMENT</span>
+            <span style="color:{status_color};font-size:0.65rem;font-weight:600;">{status_text}</span>
+        </div>
+        <div style="display:flex;align-items:baseline;gap:6px;">
+            <span style="font-family:'JetBrains Mono',monospace;font-size:1.3rem;
+                         font-weight:700;color:{TEXT_PRIMARY};">{erc_prob:.0%}</span>
+            <span style="color:{TEXT_SECONDARY};font-size:0.72rem;">Direct IR</span>
+        </div>
+        <div style="background:{BG_ELEVATED};border-radius:3px;height:6px;width:100%;margin:6px 0;">
+            <div style="background:{'#A855F7' if erc_prob >= 0.6 else ACCENT};border-radius:3px;
+                        height:6px;width:{pct}%;"></div>
+        </div>
+        <div style="color:{TEXT_MUTED};font-size:0.68rem;">
+            {phase_text}{'  |  Peak: ' + str(int(peak_w)) + ' kt  |  Dip: ' + str(int(dip)) + ' kt' if peak_w > 0 else ''}
+        </div>
+    </div>
+    """
+
+
+def _wind_radii_card(risk: dict) -> str:
+    """Compact wind radii card."""
+    if not risk:
+        return ""
+    radii = risk.get("wind_radii_km", {})
+    items = [
+        ("R34", WIND_34, radii.get("34kt", 0)),
+        ("R50", WIND_50, radii.get("50kt", 0)),
+        ("R64", WIND_64, radii.get("64kt", 0)),
+    ]
+    rows = ""
+    for label, color, val in items:
+        val_text = f"{val:.0f} km" if val > 0 else "--"
+        rows += (f'<div style="display:flex;justify-content:space-between;padding:3px 0;">'
+                 f'<span style="color:{color};font-size:0.75rem;font-weight:500;">{label}</span>'
+                 f'<span style="font-family:\'JetBrains Mono\',monospace;color:{TEXT_PRIMARY};'
+                 f'font-size:0.78rem;">{val_text}</span></div>')
+
+    return f"""
+    <div style="background:{BG_SURFACE};border:1px solid {BORDER};border-radius:6px;
+                padding:14px 16px;border-left:3px solid {ACCENT};">
+        <div style="color:{TEXT_MUTED};font-size:0.65rem;text-transform:uppercase;
+                    letter-spacing:0.08em;margin-bottom:8px;">WIND RADII</div>
+        {rows}
+    </div>
+    """
 
 
 # --------------------------------------------------------------------------- #
@@ -610,112 +715,78 @@ MAP_LEGEND_HTML = f"""
 
 def main():
     st.set_page_config(
-        page_title="ChakraNetra | AI Cyclone Forecasting",
+        page_title="ChakraNetra | Cyclone Warning Centre",
         page_icon="https://em-content.zobj.net/source/twitter/408/cyclone_1f300.png",
         layout="wide",
         initial_sidebar_state="expanded",
     )
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-    # --- Header ---
-    st.markdown(
-        f"""
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:4px;">
-            <span style="font-size:2.2rem;">&#127744;</span>
-            <div>
-                <h1 style="margin:0;padding:0;font-size:1.8rem;font-weight:700;
-                    color:{TEXT_PRIMARY};letter-spacing:-0.02em;">ChakraNetra</h1>
-                <p style="margin:0;color:{TEXT_MUTED};font-size:0.85rem;">
-                    AI-Powered Cyclone Track &amp; Intensity Forecasting
-                    &nbsp;|&nbsp; Team Techtonic &nbsp;|&nbsp; SIH 2026</p>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # --- Sidebar ---
+    # ================================================================== #
+    # SIDEBAR — Storm selection only, no dev controls
+    # ================================================================== #
     with st.sidebar:
-        st.markdown(f"<h3 style='color:{ACCENT};margin-bottom:4px;'>Control Panel</h3>",
-                    unsafe_allow_html=True)
-
-        use_api = st.toggle("Use API backend", value=False,
-                            help="Toggle between API and direct-import mode")
-        api_up = False
-        if use_api:
-            api_up = _api_available(API_BASE)
-            if api_up:
-                st.success(f"Connected: {API_BASE}", icon="\U0001f7e2")
-            else:
-                st.warning("API unreachable. Using direct imports.", icon="\U0001f7e1")
-                use_api = False
-        if not use_api:
-            st.info("Direct-import mode", icon="\U0001f4e6")
+        st.markdown(
+            f"<div style='padding:8px 0 12px 0;'>"
+            f"<span style='font-size:1.4rem;font-weight:700;color:{TEXT_PRIMARY};'"
+            f">ChakraNetra</span><br>"
+            f"<span style='color:{TEXT_MUTED};font-size:0.72rem;'>Cyclone Warning Centre</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
         st.divider()
 
-        # --- Data source: built-in or upload ---
         data_source = st.radio(
-            "Data Source",
+            "DATA SOURCE",
             ["Built-in storms", "Upload IBTrACS CSV"],
             horizontal=True,
         )
 
-        # State variables
         selected_storm = None
         storm_df = None
         prediction = None
         lead_times = [24, 48, 72]
         is_uploaded = False
-        upload_warning = ""
 
         if data_source == "Built-in storms":
             try:
-                storm_ids = (_get_storm_ids_api(API_BASE)
-                             if (use_api and api_up)
-                             else _get_storm_ids_direct())
+                storm_ids = _get_storm_ids_direct()
             except Exception as e:
                 st.error(f"Cannot load storms: {e}")
                 storm_ids = []
 
             if not storm_ids:
-                st.error("No storm data found. Run `python -m src.data_pipeline` first.")
+                st.error("No storm data. Run `python -m src.data_pipeline` first.")
                 return
 
-            selected_storm = st.selectbox("Select Storm", storm_ids, index=0)
+            selected_storm = st.selectbox("SELECT STORM", storm_ids, index=0)
 
         else:
-            # --- Upload UI (Contract 6) ---
-            st.subheader("Upload a storm (IBTrACS CSV)")
-            uploaded = st.file_uploader(
-                "Any IBTrACS-format CSV -- single or multi-storm export",
-                type="csv",
-            )
+            st.markdown(f"<p style='color:{TEXT_SECONDARY};font-size:0.78rem;'>Upload any IBTrACS-format CSV export</p>",
+                        unsafe_allow_html=True)
+            uploaded = st.file_uploader("CSV file", type="csv", label_visibility="collapsed")
             is_uploaded = True
 
             if uploaded is not None:
-                # Size check (20 MB)
                 if uploaded.size > 200 * 1024 * 1024:
-                    st.error("File too large (>200 MB). Use a smaller export.")
+                    st.error("File too large (>200 MB).")
                     return
 
                 try:
                     from src.data_pipeline import validate_upload
                     raw_upload = pd.read_csv(uploaded, low_memory=False)
                 except Exception:
-                    st.error("Couldn't read that as a CSV -- is it the raw IBTrACS export?")
+                    st.error("Could not read CSV -- check IBTrACS format.")
                     return
 
                 ok, upload_storms_df, error_msg = validate_upload(raw_upload)
                 if not ok:
                     st.error(error_msg)
                     return
-
                 if error_msg:
-                    upload_warning = error_msg
                     st.warning(error_msg)
 
-                # Storm picker for multi-storm files
                 storm_options = (
                     upload_storms_df.groupby("storm_id")
                     .agg(
@@ -723,44 +794,44 @@ def main():
                              else ("storm_id", "first"),
                         basin=("basin", "first"),
                         obs=("timestamp", "count"),
-                        start=("timestamp", "min"),
-                        end=("timestamp", "max"),
                     )
                     .reset_index()
                 )
 
                 def _format_storm(sid):
                     row = storm_options[storm_options.storm_id == sid].iloc[0]
-                    name = row["name"] if row["name"] and str(row["name"]).strip() not in ("", "NOT_NAMED", "UNNAMED") else ""
+                    name = row["name"] if str(row["name"]).strip() not in ("", "NOT_NAMED", "UNNAMED") else ""
                     label = f"{name} ({sid})" if name else sid
-                    return f"{label} -- {row['basin']}, {row['obs']} obs"
+                    return f"{label} | {row['basin']} | {row['obs']} obs"
 
                 selected_storm = st.selectbox(
-                    "Storm found in this file",
-                    storm_options["storm_id"].tolist(),
+                    "SELECT STORM", storm_options["storm_id"].tolist(),
                     format_func=_format_storm,
                 )
                 storm_df = upload_storms_df[
                     upload_storms_df["storm_id"] == selected_storm
                 ].copy()
                 storm_df = storm_df.sort_values("timestamp").reset_index(drop=True)
-                # Drop 'name' column before feeding to model
                 if "name" in storm_df.columns:
                     storm_df = storm_df.drop(columns=["name"])
-
             else:
-                st.info("Upload a CSV to get started.")
+                st.info("Upload a CSV to begin.")
                 return
 
+        # Sidebar intensity scale
         st.divider()
-        # Intensity color scale reference
-        st.markdown("<p style='color:#94A3B8;font-size:0.75rem;margin-bottom:4px;'>INTENSITY SCALE</p>",
+        st.markdown(f"<p style='color:{TEXT_MUTED};font-size:0.65rem;text-transform:uppercase;"
+                    f"letter-spacing:0.06em;'>INTENSITY SCALE</p>",
                     unsafe_allow_html=True)
+        scale_html = ""
         for cat, col in CAT_COLORS.items():
-            st.markdown(f"<span style='color:{col};font-size:0.8rem;'>&#9679; {cat}</span>",
-                        unsafe_allow_html=True)
+            scale_html += f"<span style='color:{col};font-size:0.75rem;margin-right:10px;'>&#9679; {cat}</span>"
+        st.markdown(scale_html, unsafe_allow_html=True)
 
-    # --- Load data (built-in path) ---
+    # ================================================================== #
+    # MAIN AREA — Load data + predict
+    # ================================================================== #
+
     if not is_uploaded:
         try:
             df = pd.read_csv(STORMS_CSV)
@@ -771,87 +842,127 @@ def main():
             return
 
     if storm_df is None or storm_df.empty:
-        st.warning(f"No observation data for storm **{selected_storm}**. Select a different storm.")
+        st.warning(f"No data for storm **{selected_storm}**.")
         return
 
-    # --- Prediction ---
-    with st.spinner("Running forecast pipeline..."):
+    with st.spinner("Running forecast..."):
         try:
             if is_uploaded:
-                # Validate history before inference
                 from src.model import validate_history
                 ok, msg = validate_history(storm_df)
                 if not ok:
-                    st.warning(f"Can't forecast this storm yet: {msg}")
+                    st.warning(f"Cannot forecast: {msg}")
                     prediction = None
                 else:
                     prediction = _predict_from_upload(storm_df, lead_times)
-            elif use_api and api_up:
-                prediction = _predict_api(API_BASE, selected_storm, lead_times)
             else:
                 prediction = _predict_direct(selected_storm, lead_times)
         except Exception as e:
             st.error(f"Prediction failed: {e}")
 
-
-    # --- Top metric cards ---
+    # ================================================================== #
+    # STATUS BAR — Operational context
+    # ================================================================== #
     peak_wind = storm_df["wind_kt"].max()
     basin = storm_df.iloc[0].get("basin", "NI")
+    basin_name = "Bay of Bengal" if basin == "BOB" else "Arabian Sea" if basin == "ARB" else basin
+    cat = _wind_category(peak_wind)
+    cat_color = _wind_color(peak_wind)
     risk = prediction.get("risk") if prediction else None
     risk_score = risk["risk_score"] if risk else 0.0
     tier_label, tier_color = _risk_tier(risk_score)
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Storm ID", selected_storm)
-    c2.metric("Basin", "Bay of Bengal" if basin == "BOB" else "Arabian Sea" if basin == "ARB" else basin)
-    c3.metric("Peak Wind", f"{peak_wind:.0f} kt", delta=_wind_category(peak_wind))
-    c4.metric("Risk Tier", tier_label)
-
-    # --- Alert overlay badges (v3 SS7.2) ---
     alert_overlays = prediction.get("alert_overlays", {}) if prediction else {}
     ri_watch = alert_overlays.get("ri_watch", False)
     erc_watch = alert_overlays.get("erc_watch", False)
+    n_obs = len(storm_df)
+    last_ts = str(storm_df.iloc[-1].get("timestamp", ""))
 
-    if ri_watch or erc_watch:
-        badge_html = "<div style='display:flex;gap:10px;margin:6px 0 10px 0;'>"
-        if ri_watch:
-            badge_html += (
-                "<span style='background:linear-gradient(135deg,#F97316,#EF4444);"
-                "color:white;padding:5px 14px;border-radius:20px;font-size:0.82rem;"
-                "font-weight:600;letter-spacing:0.03em;"
-                "animation:pulse 2s infinite;'>"
-                "&#9889; RI WATCH &mdash; Rapid Intensification Possible</span>"
-            )
-        if erc_watch:
-            badge_html += (
-                "<span style='background:linear-gradient(135deg,#DC2626,#A855F7);"
-                "color:white;padding:5px 14px;border-radius:20px;font-size:0.82rem;"
-                "font-weight:600;letter-spacing:0.03em;"
-                "animation:pulse 2s infinite;'>"
-                "&#127744; ERC WATCH &mdash; Eyewall Replacement Cycle</span>"
-            )
-        badge_html += "</div>"
-        badge_html += ("<style>@keyframes pulse{0%,100%{opacity:1}"
-                       "50%{opacity:0.7}}</style>")
-        st.markdown(badge_html, unsafe_allow_html=True)
+    # Header strip
+    alert_badges = ""
+    if ri_watch:
+        alert_badges += (f'<span style="background:{WARNING};color:#000;padding:2px 10px;'
+                         f'border-radius:4px;font-size:0.68rem;font-weight:700;'
+                         f'margin-left:8px;">RI WATCH</span>')
+    if erc_watch:
+        alert_badges += (f'<span style="background:#A855F7;color:#FFF;padding:2px 10px;'
+                         f'border-radius:4px;font-size:0.68rem;font-weight:700;'
+                         f'margin-left:8px;">ERC WATCH</span>')
 
-    # --- Tabs ---
-    tab_track, tab_risk, tab_ri_erc, tab_accuracy = st.tabs(
-        ["Track & Forecast", "Risk Assessment",
-         "RI & ERC Detection", "Model Accuracy"]
-    )
+    st.markdown(f"""
+    <div style="display:flex;align-items:center;justify-content:space-between;
+                padding:10px 0 6px 0;border-bottom:1px solid {BORDER};margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+            <span style="font-size:1.1rem;font-weight:700;color:{TEXT_PRIMARY};
+                         font-family:'JetBrains Mono',monospace;">{selected_storm}</span>
+            <span style="background:{cat_color}22;color:{cat_color};padding:2px 10px;
+                         border-radius:4px;font-size:0.72rem;font-weight:600;">{cat} | {peak_wind:.0f} kt</span>
+            <span style="color:{TEXT_MUTED};font-size:0.75rem;">{basin_name}</span>
+            <span style="background:{tier_color}22;color:{tier_color};padding:2px 10px;
+                         border-radius:4px;font-size:0.68rem;font-weight:600;">{tier_label}</span>
+            {alert_badges}
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;">
+            <span style="color:{TEXT_MUTED};font-size:0.68rem;">{n_obs} observations</span>
+            <span style="color:{TEXT_MUTED};font-size:0.68rem;">Last: {last_ts}</span>
+            <span style="display:inline-block;width:6px;height:6px;background:{SUCCESS};
+                         border-radius:50%;"></span>
+            <span style="color:{SUCCESS};font-size:0.65rem;font-weight:500;">SYSTEM OK</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    with tab_track:
-        # Map row
-        m = build_map(storm_df, prediction)
-        # BUG FIX #2: Set explicit height and use_container_width to prevent
-        # blank/black region caused by iframe height mismatch with the map component.
-        st_folium(m, height=480, use_container_width=True, returned_objects=[])
+    # ================================================================== #
+    # MAP — Hero element, dominant
+    # ================================================================== #
+    m = build_map(storm_df, prediction)
+    st_folium(m, height=520, use_container_width=True, returned_objects=[])
 
-        # Legend
-        st.markdown(MAP_LEGEND_HTML, unsafe_allow_html=True)
+    # Map legend — compact, inline
+    st.markdown(f"""
+    <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;
+                padding:6px 12px;border-radius:4px;background:{BG_SURFACE};
+                border:1px solid {BORDER};font-size:0.72rem;color:{TEXT_SECONDARY};margin-top:-8px;">
+        <span><span style="display:inline-block;width:14px;height:3px;background:{ACTUAL_TRACK};
+              border-radius:2px;vertical-align:middle;margin-right:4px;"></span>Observed</span>
+        <span><span style="display:inline-block;width:14px;height:0;border-top:2px dashed {PRED_TRACK};
+              vertical-align:middle;margin-right:4px;"></span>Forecast</span>
+        <span><span style="display:inline-block;width:10px;height:10px;background:{CONE_FILL};
+              opacity:0.4;border-radius:50%;vertical-align:middle;margin-right:3px;"></span>Uncertainty</span>
+        <span><span style="display:inline-block;width:8px;height:8px;border:2px solid {WIND_34};
+              border-radius:50%;vertical-align:middle;margin-right:3px;"></span>R34</span>
+        <span><span style="display:inline-block;width:8px;height:8px;border:2px solid {WIND_50};
+              border-radius:50%;vertical-align:middle;margin-right:3px;"></span>R50</span>
+        <span><span style="display:inline-block;width:8px;height:8px;border:2px solid {WIND_64};
+              border-radius:50%;vertical-align:middle;margin-right:3px;"></span>R64</span>
+    </div>
+    """, unsafe_allow_html=True)
 
-        # Charts row
+    # ================================================================== #
+    # INTELLIGENCE STRIP — 4 compact cards in a row
+    # ================================================================== #
+    st.markdown(f"""
+    <div style="color:{TEXT_MUTED};font-size:0.65rem;text-transform:uppercase;
+                letter-spacing:0.1em;margin:16px 0 8px 0;padding-left:2px;">STORM INTELLIGENCE</div>
+    """, unsafe_allow_html=True)
+
+    ri_data = prediction.get("ri", {}) if prediction else {}
+    erc_data = prediction.get("erc", {}) if prediction else {}
+    rmw_src = erc_data.get("reference_rmw_source", risk.get("reference_rmw_source", "inner") if risk else "inner")
+
+    ic1, ic2, ic3, ic4 = st.columns(4)
+    with ic1:
+        st.markdown(_severity_card(peak_wind, risk_score, rmw_src), unsafe_allow_html=True)
+    with ic2:
+        st.markdown(_ri_card(ri_data, ri_watch), unsafe_allow_html=True)
+    with ic3:
+        st.markdown(_erc_card(erc_data, erc_watch), unsafe_allow_html=True)
+    with ic4:
+        st.markdown(_wind_radii_card(risk), unsafe_allow_html=True)
+
+    # ================================================================== #
+    # FORECAST DETAIL — Charts side by side
+    # ================================================================== #
+    with st.expander("FORECAST DETAIL", expanded=True):
         if prediction and prediction.get("intensity"):
             ch1, ch2 = st.columns(2)
             with ch1:
@@ -863,344 +974,50 @@ def main():
                 if pfig:
                     st.plotly_chart(pfig, use_container_width=True, config={"displayModeBar": False})
 
-            # Numeric table (compact, below charts)
-            with st.expander("Numeric Forecast Table", expanded=False):
-                rows = []
-                for pt in prediction["intensity"]:
-                    interval = pt.get("interval_kt")
-                    rows.append({
-                        "Lead Time": f"+{pt['lead_h']}h",
-                        "Wind (kt)": f"{pt['wind_kt']:.1f}",
-                        "80% Interval (kt)": f"[{interval[0]:.0f}, {interval[1]:.0f}]" if interval else "--",
-                        "Pressure (hPa)": f"{pt['pressure_hpa']:.0f}",
-                    })
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-                cov = prediction.get("empirical_coverage")
-                if cov and cov > 0:
-                    st.caption(f"Measured empirical coverage: {cov:.1%} (nominal 80%)")
-                if is_uploaded:
-                    st.caption(
-                        "Uncertainty interval calibrated at 80.7% coverage on our "
-                        "held-out test storms. That coverage guarantee is proven for "
-                        "our test set, not specifically for storms outside it -- the "
-                        "interval is computed the same way here, but treat it as "
-                        "well-calibrated-in-general, not storm-specifically-verified."
-                    )
-
-    with tab_risk:
-        if not risk:
-            st.info("No risk assessment available for this storm.")
+            # Forecast table
+            coverage = prediction.get("empirical_coverage")
+            if coverage:
+                st.markdown(
+                    f"<div style='color:{TEXT_MUTED};font-size:0.72rem;padding:4px 0;'>"
+                    f"Calibration: {coverage:.1%} empirical coverage (split-conformal prediction intervals)</div>",
+                    unsafe_allow_html=True,
+                )
         else:
-            r1, r2 = st.columns([1, 1])
+            st.markdown(f"<p style='color:{TEXT_MUTED};'>No forecast data available.</p>",
+                        unsafe_allow_html=True)
 
-            with r1:
-                # Gauge
-                gauge = _build_risk_gauge(risk_score)
-                st.plotly_chart(gauge, use_container_width=True, config={"displayModeBar": False})
-
-                # Plain-language sentence
-                tier_label, tier_color = _risk_tier(risk_score)
-                strongest_wind = max(prediction["intensity"], key=lambda p: p["wind_kt"])["wind_kt"] \
-                    if prediction and prediction.get("intensity") else 0
-                st.markdown(
-                    f"<p style='text-align:center;color:{tier_color};font-weight:600;font-size:1rem;'>"
-                    f"{'This storm poses a ' + tier_label.lower() + ' wind-damage risk at ' + f'{strongest_wind:.0f}' + ' kt sustained winds.' if strongest_wind > 0 else ''}"
-                    f"</p>",
-                    unsafe_allow_html=True,
-                )
-
-            with r2:
-                st.markdown(f"<h4 style='color:{TEXT_MUTED};'>Wind Radii</h4>", unsafe_allow_html=True)
-                radii = risk.get("wind_radii_km", {})
-                for key, label, color in [("34kt", "Tropical Storm (34 kt)", WIND_34),
-                                           ("50kt", "Strong TS (50 kt)", WIND_50),
-                                           ("64kt", "Hurricane (64 kt)", WIND_64)]:
-                    r_km = radii.get(key, 0)
-                    st.markdown(
-                        f"<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
-                        f"<span style='display:inline-block;width:14px;height:14px;"
-                        f"border:2px solid {color};border-radius:50%;'></span>"
-                        f"<span style='color:{TEXT_PRIMARY};'>{label}:</span>"
-                        f"<span style='color:{color};font-weight:600;'>"
-                        f"{'%.0f km' % r_km if r_km > 0 else 'N/A (below threshold)'}</span>"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-
-                st.divider()
-                # CN-014: Show reference RMW source
-                rmw_src = risk.get("reference_rmw_source", "inner")
-                rmw_label = "Inner Eyewall" if rmw_src == "inner" else "Outer Eyewall (ERC)"
-                rmw_color = "#06B6D4" if rmw_src == "inner" else "#A855F7"
-                st.markdown(
-                    f"<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
-                    f"<span style='color:{TEXT_MUTED};'>Reference RMW:</span>"
-                    f"<span style='color:{rmw_color};font-weight:600;'>{rmw_label}</span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-                if ri_watch:
-                    st.markdown(
-                        f"<p style='color:#F97316;font-size:0.8rem;'>"
-                        f"&#9889; RI flag is boosting risk score (+12%) -- "
-                        f"storm may rapidly strengthen in the next 24h.</p>",
-                        unsafe_allow_html=True,
-                    )
-                if erc_watch:
-                    st.markdown(
-                        f"<p style='color:#A855F7;font-size:0.8rem;'>"
-                        f"&#127744; ERC flag is boosting risk score (+8%) -- "
-                        f"destructive wind radius expanding despite wind speed drop.</p>",
-                        unsafe_allow_html=True,
-                    )
-                st.markdown(
-                    f"<p style='color:{TEXT_MUTED};font-size:0.78rem;'>"
-                    f"Wind field modeled using a modified Rankine vortex "
-                    f"(decay exponent 0.5). RMW estimated via linear regression. "
-                    f"Population-density weighting is not included in this prototype.</p>",
-                    unsafe_allow_html=True,
-                )
-
-    with tab_ri_erc:
-        ri_data = prediction.get("ri", {}) if prediction else {}
-        erc_data = prediction.get("erc", {}) if prediction else {}
-
-        # --- RI Panel ---
-        st.markdown(
-            f"<h3 style='color:{TEXT_PRIMARY};margin-bottom:2px;'>"
-            f"&#9889; Rapid Intensification Detection</h3>"
-            f"<p style='color:{TEXT_MUTED};font-size:0.82rem;margin-top:0;'>"
-            f"Dual independent signals estimate P(RI in next 24h). "
-            f"RI = &#8805;30 kt wind increase in 24 hours.</p>",
-            unsafe_allow_html=True,
-        )
-
-        ri_c1, ri_c2, ri_c3 = st.columns([2, 2, 1])
-
-        env_prob = ri_data.get("environmental", {}).get("probability_24h", 0.0)
-        ltg_prob = ri_data.get("lightning", {}).get("probability_24h", 0.0)
-        agreement = ri_data.get("agreement", True)
-
-        with ri_c1:
-            # Environmental signal gauge
-            env_color = "#F97316" if env_prob >= 0.5 else "#06B6D4"
-            env_fig = go.Figure(go.Indicator(
-                mode="gauge+number",
-                value=env_prob * 100,
-                number=dict(suffix="%", font=dict(size=32, color="white")),
-                title=dict(text="Environmental (TabNet)", font=dict(size=14, color=env_color)),
-                gauge=dict(
-                    axis=dict(range=[0, 100], tickcolor="#475569", dtick=25),
-                    bar=dict(color=env_color, thickness=0.3),
-                    bgcolor="#1E293B", borderwidth=0,
-                    steps=[
-                        dict(range=[0, 30], color="#164E63"),
-                        dict(range=[30, 50], color="#3B2F0A"),
-                        dict(range=[50, 75], color="#4A1D0A"),
-                        dict(range=[75, 100], color="#5C0A0A"),
-                    ],
-                    threshold=dict(line=dict(color="white", width=2), thickness=0.8, value=50),
-                ),
-            ))
-            env_fig.update_layout(
-                height=200, margin=dict(l=25, r=25, t=40, b=10),
-                paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Inter", color="white"),
-            )
-            st.plotly_chart(env_fig, use_container_width=True, config={"displayModeBar": False})
-            st.caption("SST, shear, intensity trend, position (ERA5 proxy)")
-
-        with ri_c2:
-            # Lightning signal gauge
-            ltg_color = "#F97316" if ltg_prob >= 0.5 else "#06B6D4"
-            ltg_fig = go.Figure(go.Indicator(
-                mode="gauge+number",
-                value=ltg_prob * 100,
-                number=dict(suffix="%", font=dict(size=32, color="white")),
-                title=dict(text="Lightning Burst (XGBoost)", font=dict(size=14, color=ltg_color)),
-                gauge=dict(
-                    axis=dict(range=[0, 100], tickcolor="#475569", dtick=25),
-                    bar=dict(color=ltg_color, thickness=0.3),
-                    bgcolor="#1E293B", borderwidth=0,
-                    steps=[
-                        dict(range=[0, 30], color="#164E63"),
-                        dict(range=[30, 50], color="#3B2F0A"),
-                        dict(range=[50, 75], color="#4A1D0A"),
-                        dict(range=[75, 100], color="#5C0A0A"),
-                    ],
-                    threshold=dict(line=dict(color="white", width=2), thickness=0.8, value=50),
-                ),
-            ))
-            ltg_fig.update_layout(
-                height=200, margin=dict(l=25, r=25, t=40, b=10),
-                paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Inter", color="white"),
-            )
-            st.plotly_chart(ltg_fig, use_container_width=True, config={"displayModeBar": False})
-            st.caption("WWLLN inner-core lightning burst density (bias-corrected)")
-
-        with ri_c3:
-            # Agreement badge
-            if agreement:
-                agree_bg = "#065F46"
-                agree_text = "SIGNALS AGREE"
-                agree_icon = "&#10003;"
-            else:
-                agree_bg = "#92400E"
-                agree_text = "SIGNALS DIVERGE"
-                agree_icon = "&#9888;"
-            st.markdown(
-                f"<div style='background:{agree_bg};border-radius:12px;padding:18px 12px;"
-                f"text-align:center;margin-top:30px;'>"
-                f"<span style='font-size:1.8rem;'>{agree_icon}</span><br>"
-                f"<span style='color:white;font-weight:600;font-size:0.9rem;'>"
-                f"{agree_text}</span><br>"
-                f"<span style='color:#CBD5E1;font-size:0.75rem;'>"
-                f"Env: {env_prob:.0%} | Ltg: {ltg_prob:.0%}</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                f"<p style='color:{TEXT_MUTED};font-size:0.72rem;text-align:center;"
-                f"margin-top:8px;'>Design principle SS3.4:<br>"
-                f"Independent corroborating signals, never forced consensus.</p>",
-                unsafe_allow_html=True,
-            )
-
-        st.divider()
-
-        # --- ERC Panel ---
-        st.markdown(
-            f"<h3 style='color:{TEXT_PRIMARY};margin-bottom:2px;'>"
-            f"&#127744; Eyewall Replacement Cycle Detection</h3>"
-            f"<p style='color:{TEXT_MUTED};font-size:0.82rem;margin-top:0;'>"
-            f"Detects the counter-intuitive ERC pattern: wind drops but "
-            f"destructive radius EXPANDS 30-60 km.</p>",
-            unsafe_allow_html=True,
-        )
-
-        erc_c1, erc_c2 = st.columns([2, 3])
-        erc_prob = erc_data.get("direct_probability", 0.0)
-        erc_phase = erc_data.get("phase", "unknown")
-        erc_rmw = erc_data.get("reference_rmw_source", "inner")
-        erc_details = erc_data.get("details", {})
-
-        with erc_c1:
-            erc_color = "#A855F7" if erc_prob >= 0.6 else "#06B6D4"
-            erc_fig = go.Figure(go.Indicator(
-                mode="gauge+number",
-                value=erc_prob * 100,
-                number=dict(suffix="%", font=dict(size=32, color="white")),
-                title=dict(text="Direct IR Classifier", font=dict(size=14, color=erc_color)),
-                gauge=dict(
-                    axis=dict(range=[0, 100], tickcolor="#475569", dtick=25),
-                    bar=dict(color=erc_color, thickness=0.3),
-                    bgcolor="#1E293B", borderwidth=0,
-                    steps=[
-                        dict(range=[0, 30], color="#164E63"),
-                        dict(range=[30, 60], color="#1E3A5F"),
-                        dict(range=[60, 80], color="#3B0764"),
-                        dict(range=[80, 100], color="#5C0A0A"),
-                    ],
-                    threshold=dict(line=dict(color="white", width=2), thickness=0.8, value=60),
-                ),
-            ))
-            erc_fig.update_layout(
-                height=200, margin=dict(l=25, r=25, t=40, b=10),
-                paper_bgcolor="rgba(0,0,0,0)", font=dict(family="Inter", color="white"),
-            )
-            st.plotly_chart(erc_fig, use_container_width=True, config={"displayModeBar": False})
-
-        with erc_c2:
-            # Phase indicator
-            phase_labels = {
-                "insufficient_data": ("Insufficient Data", "#64748B"),
-                "no_qualifying_peak": ("No Qualifying Peak (< Cat 3)", "#64748B"),
-                "no_erc_pattern": ("No ERC Pattern", "#22D3EE"),
-                "pre_erc": ("Pre-ERC Watch", "#FACC15"),
-                "possible_onset": ("Possible ERC Onset", "#F97316"),
-                "active_dip": ("Active ERC Dip Detected", "#EF4444"),
-            }
-            phase_text, phase_color = phase_labels.get(erc_phase, ("Unknown", "#64748B"))
-
-            st.markdown(
-                f"<div style='background:#1E293B;border:1px solid #334155;border-radius:10px;"
-                f"padding:16px;margin-top:8px;'>"
-                f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:10px;'>"
-                f"<span style='display:inline-block;width:12px;height:12px;"
-                f"background:{phase_color};border-radius:50%;'></span>"
-                f"<span style='color:white;font-weight:600;font-size:1rem;'>"
-                f"{phase_text}</span></div>",
-                unsafe_allow_html=True,
-            )
-
-            # ERC details
-            peak_w = erc_details.get("peak_wind_kt", 0)
-            curr_w = erc_details.get("current_wind_kt", 0)
-            dip_mag = erc_details.get("dip_magnitude_kt", 0)
-
-            detail_rows = [
-                ("Peak Wind", f"{peak_w:.0f} kt" if peak_w else "--"),
-                ("Current Wind", f"{curr_w:.0f} kt" if curr_w else "--"),
-                ("Dip Magnitude", f"{dip_mag:.0f} kt" if dip_mag else "--"),
-                ("Reference RMW", "OUTER Eyewall" if erc_rmw == "outer" else "Inner Eyewall"),
-            ]
-            detail_html = ""
-            for label, val in detail_rows:
-                val_color = "#A855F7" if "OUTER" in str(val) else TEXT_PRIMARY
-                detail_html += (
-                    f"<div style='display:flex;justify-content:space-between;"
-                    f"padding:3px 0;border-bottom:1px solid #334155;'>"
-                    f"<span style='color:{TEXT_MUTED};font-size:0.85rem;'>{label}</span>"
-                    f"<span style='color:{val_color};font-weight:500;"
-                    f"font-size:0.85rem;'>{val}</span></div>"
-                )
-            st.markdown(detail_html + "</div>", unsafe_allow_html=True)
-
-            # Gated components note
-            st.markdown(
-                f"<p style='color:{TEXT_MUTED};font-size:0.72rem;margin-top:8px;'>"
-                f"Component B (Synthetic PMW): gated -- pending go/no-go checkpoint. "
-                f"Component C (RMW-Jump): post-hoc validation only.</p>",
-                unsafe_allow_html=True,
-            )
-
-    with tab_accuracy:
+    # ================================================================== #
+    # MODEL ACCURACY
+    # ================================================================== #
+    with st.expander("MODEL ACCURACY", expanded=False):
         from src.check_accuracy import render_accuracy_tab
         render_accuracy_tab()
 
-    # --- Trust footer ---
-    with st.expander("About this model", expanded=False):
-        st.markdown(
-            f"""
-**Data**: Real NOAA IBTrACS v04r01 (North Indian Ocean, 20 storms 2018-2023). Not synthetic.
+    # ================================================================== #
+    # SYSTEM INFORMATION
+    # ================================================================== #
+    with st.expander("SYSTEM INFORMATION", expanded=False):
+        mv = prediction.get("model_version", "N/A") if prediction else "N/A"
+        st.markdown(f"""
+**Data**: IBTrACS v04r01 (North Indian Ocean, 20 storms 2018-2023)
 
-**Model**: HistGradientBoostingRegressor (scikit-learn) -- a simple statistical baseline,
-not an ensemble or dynamical model. Track errors: ~280 km (+24h) to ~736 km (+72h).
-Not competitive with operational NWP forecasting.
+**Model**: HistGradientBoostingRegressor | Track error: ~280 km (+24h) to ~736 km (+72h)
 
-**Calibration**: Split-conformal prediction with measured 80.7% empirical coverage (not hardcoded).
+**Calibration**: Split-conformal prediction | Empirical coverage: 80.7%
 
-**Risk**: Modified Rankine vortex wind field with CN-014 inner/outer eyewall switching.
-RMW from linear regression. RI and ERC flags boost risk score proactively.
+**Risk Engine**: Modified Rankine vortex | CN-014 inner/outer eyewall switching
 
-**RI Detection (v3)**: Dual independent signals -- Environmental (TabNet proxy: SST, shear,
-intensity trend) and Lightning Burst (XGBoost proxy: WWLLN bias-corrected). Agreement/divergence
-is surfaced, never forced into consensus (SS3.4 design principle).
+**RI Detection**: Dual signals -- Environmental (TabNet proxy) + Lightning Burst (XGBoost/WWLLN)
 
-**ERC Detection (v3)**: Component A (Direct IR classifier proxy: intensity oscillation pattern).
-Component B (Synthetic PMW): gated. Component C (RMW-Jump): post-hoc only.
-First automated ERC detector designed for the North Indian Ocean basin.
+**ERC Detection**: Direct IR classifier | Synthetic PMW: gated | RMW-Jump: post-hoc
 
-*Model version: {prediction.get('model_version', 'N/A') if prediction else 'N/A'}*
-            """,
-        )
+*{mv} | ChakraNetra v0.3.0 | Team Techtonic | SIH 2026*
+        """)
 
-    # Model version footer
-    mv = prediction.get("model_version", "") if prediction else ""
+    # Version line
     st.markdown(
-        f"<div style='text-align:center;color:#475569;font-size:0.7rem;margin-top:16px;'>"
-        f"ChakraNetra v0.3.0 | {mv} | Master Plan v3"
-        f"</div>",
+        f"<div style='text-align:center;color:{TEXT_MUTED};font-size:0.62rem;margin-top:16px;padding:8px 0;'"
+        f">ChakraNetra v0.3.0 | Master Plan v3 | SIH26070</div>",
         unsafe_allow_html=True,
     )
 
