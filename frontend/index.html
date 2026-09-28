@@ -6,6 +6,8 @@
 <title>ChakraNetra | Cyclone Warning Centre</title>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=JetBrains+Mono:wght@100..900&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
 tailwind.config = {
@@ -55,6 +57,16 @@ tailwind.config = {
   .nav-item.active { background: #1F2937; color: #0EA5E9; font-weight: 600; border-left-color: #0EA5E9 !important; }
   @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
   .animate-pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+  /* Leaflet overrides for dark theme */
+  .leaflet-container { background: #070E1A !important; font-family: 'JetBrains Mono', monospace; }
+  .leaflet-control-zoom a { background: #151C25 !important; color: #9CA3AF !important; border-color: #1F2937 !important; }
+  .leaflet-control-zoom a:hover { background: #1F2937 !important; color: #F9FAFB !important; }
+  .leaflet-control-attribution { background: rgba(11,17,32,0.85) !important; color: #6B7280 !important; font-size: 9px !important; }
+  .leaflet-control-attribution a { color: #0EA5E9 !important; }
+  .leaflet-popup-content-wrapper { background: #111827 !important; color: #F9FAFB !important; border: 1px solid #1F2937 !important; border-radius: 6px !important; }
+  .leaflet-popup-tip { background: #111827 !important; }
+  .leaflet-popup-content { font-family: 'JetBrains Mono', monospace !important; font-size: 11px !important; }
+  .forecast-pulse { animation: pulse-dot 1.5s ease-in-out infinite; }
 </style>
 </head>
 <body class="font-sans text-sm antialiased bg-bg-base text-text-primary">
@@ -189,7 +201,7 @@ tailwind.config = {
   <div class="p-3 flex flex-col gap-3">
     <!-- Map viewport -->
     <div id="map-container" class="relative w-full h-[520px] bg-[#070D18] border border-border-subtle rounded-md overflow-hidden">
-      <div class="absolute top-0 left-0 right-0 h-7 bg-bg-surface/90 border-b border-border-subtle px-3 flex items-center justify-between z-20 font-mono text-[12px] text-text-secondary">
+      <div class="absolute top-0 left-0 right-0 h-7 bg-bg-surface/90 border-b border-border-subtle px-3 flex items-center justify-between z-[1000] font-mono text-[12px] text-text-secondary" style="pointer-events:none;">
         <div class="flex items-center gap-4">
           <span class="text-text-primary"><span class="text-text-muted">CURSOR:</span> <span id="map-cursor">--</span></span>
           <span class="text-border-subtle">|</span>
@@ -197,7 +209,8 @@ tailwind.config = {
         </div>
         <span class="font-mono text-[10px] text-accent-light tracking-wider uppercase">GIS: EPSG:4326 WGS84</span>
       </div>
-      <div id="map-svg-area" class="w-full h-full"></div>
+      <div id="leaflet-map" class="w-full h-full" style="z-index:1;"></div>
+    </div>
     </div>
 
     <!-- Legend strip -->
@@ -627,51 +640,179 @@ function updateUI(d, p) {
   populateStormGrid();
 }
 
-// SVG Map
+// Leaflet Interactive Map
+let leafletMap = null;
+let mapLayers = [];
+
 function renderMap(d, p) {
   if (!d || !d.observations || !d.observations.length) return;
   const obs = d.observations;
-  const c = document.getElementById('map-svg-area');
-  let mnLa=99,mxLa=-99,mnLo=999,mxLo=-999;
-  obs.forEach(o=>{mnLa=Math.min(mnLa,o.lat);mxLa=Math.max(mxLa,o.lat);mnLo=Math.min(mnLo,o.lon);mxLo=Math.max(mxLo,o.lon);});
-  if(p&&p.track)p.track.forEach(t=>{mnLa=Math.min(mnLa,t.lat);mxLa=Math.max(mxLa,t.lat);mnLo=Math.min(mnLo,t.lon);mxLo=Math.max(mxLo,t.lon);});
-  const pad=3; mnLa-=pad;mxLa+=pad;mnLo-=pad;mxLo+=pad;
-  const W=1100,H=520;
-  function ts(la,lo){return[((lo-mnLo)/(mxLo-mnLo))*W,H-((la-mnLa)/(mxLa-mnLa))*H];}
-  let s='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 '+W+' '+H+'" class="w-full h-full" preserveAspectRatio="xMidYMid slice">';
-  s+='<rect width="100%" height="100%" fill="#070E1A"/>';
-  s+='<defs><pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="#162234" stroke-width="0.5"/></pattern></defs>';
-  s+='<rect width="100%" height="100%" fill="url(#grid)"/>';
-  for(let la=Math.ceil(mnLa/5)*5;la<=mxLa;la+=5){const[,y]=ts(la,mnLo);s+='<line x1="0" x2="'+W+'" y1="'+y+'" y2="'+y+'" stroke="#1F2937" stroke-dasharray="2 4" stroke-width="1"/>';s+='<text x="12" y="'+(y-4)+'" fill="#4B5563" font-family="JetBrains Mono" font-size="10">'+la+'\u00B0N</text>';}
-  for(let lo=Math.ceil(mnLo/5)*5;lo<=mxLo;lo+=5){const[x]=ts(mnLa,lo);s+='<line x1="'+x+'" x2="'+x+'" y1="0" y2="'+H+'" stroke="#1F2937" stroke-dasharray="2 4" stroke-width="1"/>';s+='<text x="'+(x+4)+'" y="'+(H-8)+'" fill="#4B5563" font-family="JetBrains Mono" font-size="10">'+lo+'\u00B0E</text>';}
-  const cp=ts((mnLa+mxLa)/2,(mnLo+mxLo)/2);
-  s+='<text x="'+cp[0]+'" y="'+cp[1]+'" fill="#1E293B" font-family="Inter" font-size="28" font-weight="800" letter-spacing="0.15em" text-anchor="middle">'+(d.basin==='BOB'?'BAY OF BENGAL':'ARABIAN SEA')+'</text>';
-  // Track
-  for(let i=1;i<obs.length;i++){const[x1,y1]=ts(obs[i-1].lat,obs[i-1].lon);const[x2,y2]=ts(obs[i].lat,obs[i].lon);const cl=windCategory(obs[i].wind_kt).color;const w=2+(obs[i].wind_kt/50);s+='<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="'+cl+'" stroke-linecap="round" stroke-width="'+w+'"/>';}
-  // Genesis
-  const[gx,gy]=ts(obs[0].lat,obs[0].lon);
-  s+='<circle cx="'+gx+'" cy="'+gy+'" r="7" fill="#0284C7" stroke="white" stroke-width="1.5"/>';
-  s+='<text x="'+gx+'" y="'+(gy+4)+'" fill="white" font-family="JetBrains Mono" font-size="10" font-weight="700" text-anchor="middle">G</text>';
-  // Current
-  const last=obs[obs.length-1];const[cx,cy]=ts(last.lat,last.lon);
-  s+='<circle cx="'+cx+'" cy="'+cy+'" r="14" fill="none" stroke="#EF4444" stroke-opacity="0.8" stroke-width="2"/>';
-  s+='<circle cx="'+cx+'" cy="'+cy+'" r="6" fill="#EF4444"/><circle cx="'+cx+'" cy="'+cy+'" r="2.5" fill="white"/>';
-  s+='<rect x="'+(cx+18)+'" y="'+(cy-22)+'" width="140" height="38" rx="3" fill="#111827" stroke="#DC2626" stroke-width="1.2"/>';
-  s+='<text x="'+(cx+24)+'" y="'+(cy-8)+'" fill="white" font-family="JetBrains Mono" font-size="11" font-weight="700">'+last.lat+'\u00B0N, '+last.lon+'\u00B0E</text>';
-  s+='<text x="'+(cx+24)+'" y="'+(cy+8)+'" fill="#F87171" font-family="JetBrains Mono" font-size="10.5">'+last.wind_kt+' kt | '+last.pressure_hpa+' hPa</text>';
-  // Wind radii
-  if(p&&p.risk&&p.risk.wind_radii_km){const wr=p.risk.wind_radii_km;const sc=W/((mxLo-mnLo)*111);
-    if(wr['34kt']){const r=wr['34kt']*sc;s+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="#FACC15" fill-opacity="0.08" stroke="#FACC15" stroke-dasharray="4 3" stroke-width="1.2"/>';}
-    if(wr['50kt']){const r=wr['50kt']*sc;s+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="#F97316" fill-opacity="0.10" stroke="#F97316" stroke-width="1.4"/>';}
-    if(wr['64kt']){const r=wr['64kt']*sc;s+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="#EF4444" fill-opacity="0.14" stroke="#EF4444" stroke-width="1.6"/>';}
+
+  // Initialize map once
+  if (!leafletMap) {
+    leafletMap = L.map('leaflet-map', {
+      center: [15, 82],
+      zoom: 5,
+      zoomControl: true,
+      attributionControl: true,
+    });
+    // Esri Dark Gray tiles (free, no API key)
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Esri | ChakraNetra CWC',
+      maxZoom: 16,
+    }).addTo(leafletMap);
+    // Reference labels on top
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 16,
+    }).addTo(leafletMap);
+    // Mouse move: update cursor display
+    leafletMap.on('mousemove', function(e) {
+      document.getElementById('map-cursor').textContent = e.latlng.lat.toFixed(2) + '\u00B0N, ' + e.latlng.lng.toFixed(2) + '\u00B0E';
+    });
   }
-  // Forecast
-  if(p&&p.track&&p.track.length){let fp='M '+cx+' '+cy;p.track.forEach(t=>{const[fx,fy]=ts(t.lat,t.lon);fp+=' L '+fx+' '+fy;});s+='<path d="'+fp+'" fill="none" stroke="#F43F5E" stroke-dasharray="5 4" stroke-width="2.5"/>';
-    p.track.forEach((t,i)=>{const[fx,fy]=ts(t.lat,t.lon);s+='<circle cx="'+fx+'" cy="'+fy+'" r="5" fill="#111827" stroke="#F43F5E" stroke-width="2"/>';const wl=p.intensity&&p.intensity[i]?Math.round(p.intensity[i].wind_kt):'?';s+='<text x="'+(fx+10)+'" y="'+(fy+4)+'" fill="#FDA4AF" font-family="JetBrains Mono" font-size="11" font-weight="700">+'+t.lead_h+'h ('+wl+'kt)</text>';});
+
+  // Clear previous overlays
+  mapLayers.forEach(l => leafletMap.removeLayer(l));
+  mapLayers = [];
+
+  // Compute bounds for fit
+  const bounds = L.latLngBounds(obs.map(o => [o.lat, o.lon]));
+  if (p && p.track) p.track.forEach(t => bounds.extend([t.lat, t.lon]));
+  leafletMap.fitBounds(bounds.pad(0.15));
+
+  // --- Observed Track (color-coded segments) ---
+  for (let i = 1; i < obs.length; i++) {
+    const seg = L.polyline(
+      [[obs[i-1].lat, obs[i-1].lon], [obs[i].lat, obs[i].lon]],
+      { color: windCategory(obs[i].wind_kt).color, weight: 3 + (obs[i].wind_kt / 60), opacity: 0.9, lineCap: 'round' }
+    ).addTo(leafletMap);
+    mapLayers.push(seg);
   }
-  s+='</svg>';c.innerHTML=s;
-  document.getElementById('map-cursor').textContent=last.lat+'\u00B0N, '+last.lon+'\u00B0E';
-  document.getElementById('map-dist').textContent='CURRENT V_MAX: '+last.wind_kt+' KT';
+
+  // Observation dots (small, every point)
+  obs.forEach((o, i) => {
+    if (i === 0 || i === obs.length - 1) return; // skip genesis/current
+    const dot = L.circleMarker([o.lat, o.lon], {
+      radius: 3, fillColor: windCategory(o.wind_kt).color, fillOpacity: 0.7,
+      stroke: false,
+    }).bindPopup('<b>' + d.storm_id + '</b><br>Step ' + i + '<br>' + o.wind_kt + ' kt | ' + o.pressure_hpa + ' hPa<br>' + o.lat + '\u00B0N, ' + o.lon + '\u00B0E').addTo(leafletMap);
+    mapLayers.push(dot);
+  });
+
+  // --- Genesis Marker ---
+  const genesis = obs[0];
+  const genesisIcon = L.divIcon({
+    className: '',
+    html: '<div style="width:18px;height:18px;border-radius:50%;background:#0284C7;border:2px solid white;display:flex;align-items:center;justify-content:center;font-family:JetBrains Mono;font-size:10px;font-weight:700;color:white;">G</div>',
+    iconSize: [18, 18], iconAnchor: [9, 9],
+  });
+  const gMarker = L.marker([genesis.lat, genesis.lon], { icon: genesisIcon })
+    .bindPopup('<b>GENESIS</b><br>' + genesis.lat + '\u00B0N, ' + genesis.lon + '\u00B0E<br>' + genesis.wind_kt + ' kt').addTo(leafletMap);
+  mapLayers.push(gMarker);
+
+  // --- Current Position ---
+  const last = obs[obs.length - 1];
+  const wc = windCategory(last.wind_kt);
+  // Outer ring (pulsing)
+  const outerRing = L.circleMarker([last.lat, last.lon], {
+    radius: 16, fillColor: 'transparent', fillOpacity: 0,
+    color: '#EF4444', weight: 2, opacity: 0.8, className: 'forecast-pulse',
+  }).addTo(leafletMap);
+  mapLayers.push(outerRing);
+  // Inner dot
+  const currentDot = L.circleMarker([last.lat, last.lon], {
+    radius: 7, fillColor: '#EF4444', fillOpacity: 1,
+    color: 'white', weight: 2,
+  }).bindPopup(
+    '<div style="text-align:center"><b style="color:#EF4444">CURRENT POSITION</b><br>' +
+    '<span style="font-size:13px;font-weight:700">' + last.lat + '\u00B0N, ' + last.lon + '\u00B0E</span><br>' +
+    '<span style="color:#F87171">' + last.wind_kt + ' kt | ' + last.pressure_hpa + ' hPa</span><br>' +
+    '<span style="color:' + wc.color + ';font-weight:700">' + wc.cat + ' (' + wc.imd + ')</span></div>'
+  ).addTo(leafletMap);
+  mapLayers.push(currentDot);
+
+  // --- Wind Radii Circles (at current position) ---
+  if (p && p.risk && p.risk.wind_radii_km) {
+    const wr = p.risk.wind_radii_km;
+    if (wr['34kt']) {
+      const c34 = L.circle([last.lat, last.lon], {
+        radius: wr['34kt'] * 1000, fillColor: '#FACC15', fillOpacity: 0.06,
+        color: '#FACC15', weight: 1.2, dashArray: '6 4',
+      }).bindPopup('R34 (Gale Force): ' + Math.round(wr['34kt']) + ' km').addTo(leafletMap);
+      mapLayers.push(c34);
+    }
+    if (wr['50kt']) {
+      const c50 = L.circle([last.lat, last.lon], {
+        radius: wr['50kt'] * 1000, fillColor: '#F97316', fillOpacity: 0.08,
+        color: '#F97316', weight: 1.4,
+      }).bindPopup('R50 (Storm Force): ' + Math.round(wr['50kt']) + ' km').addTo(leafletMap);
+      mapLayers.push(c50);
+    }
+    if (wr['64kt']) {
+      const c64 = L.circle([last.lat, last.lon], {
+        radius: wr['64kt'] * 1000, fillColor: '#EF4444', fillOpacity: 0.12,
+        color: '#EF4444', weight: 1.6,
+      }).bindPopup('R64 (Hurricane Force): ' + Math.round(wr['64kt']) + ' km').addTo(leafletMap);
+      mapLayers.push(c64);
+    }
+  }
+
+  // --- Forecast Track with Uncertainty Cones ---
+  if (p && p.track && p.track.length) {
+    // Dashed forecast line
+    const fCoords = [[last.lat, last.lon]];
+    p.track.forEach(t => fCoords.push([t.lat, t.lon]));
+    const fLine = L.polyline(fCoords, {
+      color: '#F43F5E', weight: 2.5, dashArray: '8 6', opacity: 0.9,
+    }).addTo(leafletMap);
+    mapLayers.push(fLine);
+
+    // Forecast nodes with uncertainty circles
+    p.track.forEach((t, i) => {
+      const windAtLead = p.intensity && p.intensity[i] ? Math.round(p.intensity[i].wind_kt) : '?';
+      const coneKm = t.cone_km_upper || (80 + t.lead_h * 2.5); // fallback cone radius
+
+      // Uncertainty cone circle
+      const cone = L.circle([t.lat, t.lon], {
+        radius: coneKm * 1000, // km to meters
+        fillColor: '#F43F5E', fillOpacity: 0.08,
+        color: '#F43F5E', weight: 1.5, dashArray: '4 4', opacity: 0.6,
+      }).addTo(leafletMap);
+      mapLayers.push(cone);
+
+      // Inner filled circle (semi-transparent)
+      const innerCone = L.circle([t.lat, t.lon], {
+        radius: (coneKm * 0.5) * 1000,
+        fillColor: '#F43F5E', fillOpacity: 0.12,
+        color: '#F43F5E', weight: 0.5, opacity: 0.3,
+      }).addTo(leafletMap);
+      mapLayers.push(innerCone);
+
+      // Forecast dot
+      const fDot = L.circleMarker([t.lat, t.lon], {
+        radius: 6, fillColor: '#111827', fillOpacity: 1,
+        color: '#F43F5E', weight: 2.5,
+      }).bindPopup(
+        '<div style="text-align:center"><b style="color:#F43F5E">FORECAST +' + t.lead_h + 'h</b><br>' +
+        t.lat + '\u00B0N, ' + t.lon + '\u00B0E<br>' +
+        '<span style="font-weight:700">' + windAtLead + ' kt</span><br>' +
+        '<span style="color:#9CA3AF">Cone: \u00B1' + Math.round(coneKm) + ' km</span></div>'
+      ).addTo(leafletMap);
+      mapLayers.push(fDot);
+
+      // Lead-time label
+      const labelIcon = L.divIcon({
+        className: '',
+        html: '<div style="background:#111827;border:1px solid #F43F5E;border-radius:4px;padding:1px 6px;font-family:JetBrains Mono;font-size:11px;font-weight:700;color:#FDA4AF;white-space:nowrap;">+' + t.lead_h + 'h (' + windAtLead + 'kt)</div>',
+        iconSize: [0, 0], iconAnchor: [-12, 6],
+      });
+      const label = L.marker([t.lat, t.lon], { icon: labelIcon, interactive: false }).addTo(leafletMap);
+      mapLayers.push(label);
+    });
+  }
+
+  // Update header cursor
+  document.getElementById('map-dist').textContent = 'CURRENT V_MAX: ' + last.wind_kt + ' KT';
 }
 
 // Canvas charts
