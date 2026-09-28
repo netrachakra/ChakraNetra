@@ -105,8 +105,8 @@ tailwind.config = {
       </div>
       <div class="p-1.5 bg-bg-base border border-border-subtle rounded flex items-center justify-between">
         <div class="flex flex-col min-w-0 w-full">
-          <select id="storm-select" class="bg-transparent text-text-primary font-mono text-[12px] font-semibold w-full focus:outline-none cursor-pointer" onchange="onStormChange(this.value)">
-            <option value="">Loading storms...</option>
+          <select id="storm-select" class="bg-[#0B1120] text-text-primary font-mono text-[12px] font-semibold w-full focus:outline-none cursor-pointer border-0 appearance-none" style="background-color:#0B1120;color:#F9FAFB;-webkit-appearance:none;" onchange="onStormChange(this.value)">
+            <option value="" style="background:#0B1120;color:#F9FAFB;">Loading storms...</option>
           </select>
           <span id="sidebar-basin" class="font-mono text-[10px] text-text-muted uppercase">--</span>
         </div>
@@ -555,7 +555,7 @@ async function fetchStorms() {
     allStorms = data.storm_ids || [];
     const sel = document.getElementById('storm-select');
     sel.innerHTML = '';
-    allStorms.forEach(sid => { const o = document.createElement('option'); o.value = sid; o.textContent = sid; sel.appendChild(o); });
+    allStorms.forEach(sid => { const o = document.createElement('option'); o.value = sid; o.textContent = sid; o.style.background='#0B1120'; o.style.color='#F9FAFB'; sel.appendChild(o); });
     if (allStorms.length > 0) {
       const pick = allStorms.find(s => s.includes('2019116')) || allStorms[0];
       sel.value = pick;
@@ -937,16 +937,55 @@ function updateRiskPage(p, d) {
   ];
   wf.innerHTML=items.map(it=>'<div class="flex items-center justify-between"><span class="text-[12px] text-text-secondary">'+it.l+'</span><div class="flex items-center gap-2"><div class="w-32 h-2 bg-bg-elevated rounded-full overflow-hidden"><div class="h-full rounded-full" style="width:'+it.pct+'%;background:'+it.c+'"></div></div><span class="font-mono text-[12px] font-bold" style="color:'+it.c+'">'+it.v+'</span></div></div>').join('')+'<div class="border-t border-border-subtle pt-2 flex items-center justify-between"><span class="text-[14px] font-bold">COMPOSITE RISK SCORE</span><span class="font-mono text-[20px] font-bold" style="color:'+riskTier(risk.risk_score).color+'">'+risk.risk_score.toFixed(4)+'</span></div>';
   document.getElementById('quadrant-grid').innerHTML=['NE','SE','SW','NW'].map(q=>'<div class="bg-bg-surface border border-border-subtle rounded p-2 text-center"><span class="block font-mono text-[10px] text-text-muted">'+q+'</span><span class="block font-mono text-[14px] font-bold text-text-primary">'+(25+Math.random()*15).toFixed(0)+'%</span></div>').join('');
-  // Radial canvas
-  const cv=document.getElementById('radial-canvas');
-  if(cv&&risk.wind_radii_km){const ctx=cv.getContext('2d');const sz=cv.offsetWidth;cv.width=sz*2;cv.height=sz*2;ctx.scale(2,2);
-    const cx=sz/2,cy=sz/2,mR=sz/2-20;ctx.clearRect(0,0,sz,sz);
-    const radii=[{k:'34kt',c:'#FACC15',l:'R34'},{k:'50kt',c:'#F97316',l:'R50'},{k:'64kt',c:'#EF4444',l:'R64'}];
-    const mKm=Math.max(risk.wind_radii_km['34kt']||1,1);
-    radii.forEach(r=>{const km=risk.wind_radii_km[r.k]||0;const rd=(km/mKm)*mR;ctx.strokeStyle=r.c;ctx.lineWidth=1.5;ctx.setLineDash([4,3]);ctx.fillStyle=r.c+'15';ctx.beginPath();ctx.arc(cx,cy,rd,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=r.c;ctx.font='bold 10px JetBrains Mono';ctx.textAlign='left';ctx.fillText(r.l+' ('+Math.round(km)+'km)',cx+rd*0.7+5,cy-rd*0.7);});
-    ctx.fillStyle='#EF4444';ctx.beginPath();ctx.arc(cx,cy,6,0,Math.PI*2);ctx.fill();ctx.fillStyle='white';ctx.beginPath();ctx.arc(cx,cy,2.5,0,Math.PI*2);ctx.fill();
-    ctx.strokeStyle='#374151';ctx.lineWidth=0.5;ctx.setLineDash([2,2]);ctx.beginPath();ctx.moveTo(cx,10);ctx.lineTo(cx,sz-10);ctx.stroke();ctx.beginPath();ctx.moveTo(10,cy);ctx.lineTo(sz-10,cy);ctx.stroke();ctx.setLineDash([]);
-    ctx.fillStyle='#6B7280';ctx.font='10px JetBrains Mono';ctx.textAlign='center';ctx.fillText('N',cx,18);ctx.fillText('S',cx,sz-8);ctx.fillText('E',sz-10,cy+4);ctx.fillText('W',14,cy+4);
+  // Radial canvas — use fixed 400px so it works even when tab is hidden (offsetWidth=0)
+  const cv = document.getElementById('radial-canvas');
+  if (cv && risk.wind_radii_km) {
+    const ctx = cv.getContext('2d');
+    const SZ = 400; // fixed logical size
+    cv.width = SZ * 2; cv.height = SZ * 2; ctx.scale(2, 2);
+    const cx = SZ / 2, cy = SZ / 2, mR = SZ / 2 - 24;
+    ctx.clearRect(0, 0, SZ, SZ);
+
+    // Background
+    ctx.fillStyle = '#0B1120'; ctx.fillRect(0, 0, SZ, SZ);
+
+    // Grid rings
+    [0.25, 0.5, 0.75, 1.0].forEach(f => {
+      ctx.strokeStyle = '#1F2937'; ctx.lineWidth = 0.5; ctx.setLineDash([2, 4]);
+      ctx.beginPath(); ctx.arc(cx, cy, mR * f, 0, Math.PI * 2); ctx.stroke();
+    });
+    ctx.setLineDash([]);
+
+    // Crosshair
+    ctx.strokeStyle = '#374151'; ctx.lineWidth = 0.5; ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(cx, 10); ctx.lineTo(cx, SZ - 10); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(10, cy); ctx.lineTo(SZ - 10, cy); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Wind radii circles
+    const radii = [{k:'34kt',c:'#FACC15',l:'R34'},{k:'50kt',c:'#F97316',l:'R50'},{k:'64kt',c:'#EF4444',l:'R64'}];
+    const mKm = Math.max(risk.wind_radii_km['34kt'] || 1, 1);
+    radii.forEach(r => {
+      const km = risk.wind_radii_km[r.k] || 0;
+      if (km <= 0) return;
+      const rd = (km / mKm) * mR;
+      ctx.strokeStyle = r.c; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
+      ctx.fillStyle = r.c + '18';
+      ctx.beginPath(); ctx.arc(cx, cy, rd, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = r.c; ctx.font = 'bold 10px JetBrains Mono'; ctx.textAlign = 'left';
+      ctx.fillText(r.l + ' (' + Math.round(km) + ' km)', cx + rd * 0.65 + 4, cy - rd * 0.65);
+    });
+
+    // Storm center dot
+    ctx.fillStyle = '#EF4444'; ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'white'; ctx.beginPath(); ctx.arc(cx, cy, 2.5, 0, Math.PI * 2); ctx.fill();
+
+    // Compass labels
+    ctx.fillStyle = '#9CA3AF'; ctx.font = '11px JetBrains Mono'; ctx.textAlign = 'center';
+    ctx.fillText('N', cx, 18); ctx.fillText('S', cx, SZ - 6);
+    ctx.textAlign = 'right'; ctx.fillText('W', 16, cy + 4);
+    ctx.textAlign = 'left'; ctx.fillText('E', SZ - 4, cy + 4);
   }
 }
 
