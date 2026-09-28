@@ -17,6 +17,8 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
 # --------------------------------------------------------------------------- #
@@ -380,6 +382,66 @@ def predict(request: PredictRequest):
         alert_overlays=AlertOverlays(**alert_flags),
         model_version=MODEL_VERSION,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Storm detail endpoint (for frontend)
+# --------------------------------------------------------------------------- #
+
+@app.get("/v1/storm-detail/{storm_id}")
+def storm_detail(storm_id: str):
+    """Return full observation history for a single storm."""
+    import pandas as pd
+    if not STORMS_CSV.exists():
+        raise HTTPException(status_code=503, detail="No storms data available")
+    df = pd.read_csv(STORMS_CSV)
+    storm = df[df["storm_id"] == storm_id].copy()
+    if storm.empty:
+        raise HTTPException(status_code=404, detail=f"Storm {storm_id} not found")
+    storm = storm.sort_values("timestamp").reset_index(drop=True)
+    peak_idx = int(storm["wind_kt"].idxmax())
+    peak = storm.loc[peak_idx]
+    return {
+        "storm_id": storm_id,
+        "basin": str(storm["basin"].iloc[0]),
+        "obs_count": len(storm),
+        "peak_wind_kt": round(float(peak["wind_kt"]), 1),
+        "min_pressure_hpa": round(float(storm["pressure_hpa"].min()), 1),
+        "first_timestamp": str(storm["timestamp"].iloc[0]),
+        "last_timestamp": str(storm["timestamp"].iloc[-1]),
+        "peak_lat": round(float(peak["lat"]), 2),
+        "peak_lon": round(float(peak["lon"]), 2),
+        "observations": [
+            {
+                "lat": round(float(r["lat"]), 2),
+                "lon": round(float(r["lon"]), 2),
+                "wind_kt": round(float(r["wind_kt"]), 1),
+                "pressure_hpa": round(float(r["pressure_hpa"]), 1),
+                "timestamp": str(r["timestamp"]),
+            }
+            for _, r in storm.iterrows()
+        ],
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Serve frontend static files
+# --------------------------------------------------------------------------- #
+
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+
+
+@app.get("/")
+def serve_frontend_root():
+    """Serve the frontend SPA."""
+    index = FRONTEND_DIR / "index.html"
+    if index.exists():
+        return FileResponse(index, media_type="text/html")
+    return {"message": "ChakraNetra API. Frontend not found. Visit /docs for API."}
+
+
+if FRONTEND_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="frontend")
 
 
 # --------------------------------------------------------------------------- #

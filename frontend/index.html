@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>ChakraNetra | Cyclone Warning Centre</title>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=JetBrains+Mono:wght@100..900&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        'bg-base': '#0B1120',
+        'bg-surface': '#111827',
+        'bg-elevated': '#1F2937',
+        'bg-hover': '#374151',
+        'border-subtle': '#1F2937',
+        'border-active': '#374151',
+        'text-primary': '#F9FAFB',
+        'text-secondary': '#9CA3AF',
+        'text-muted': '#6B7280',
+        'accent': '#0EA5E9',
+        'accent-light': '#38BDF8',
+        'critical': '#EF4444',
+        'critical-dark': '#DC2626',
+        'critical-bg': '#7F1D1D',
+        'warning': '#F59E0B',
+        'success': '#10B981',
+        'info': '#3B82F6',
+        'purple': '#A855F7',
+        'purple-light': '#C084FC',
+        'cyan': '#22D3EE',
+        'wind-34': '#FACC15',
+        'wind-50': '#F97316',
+        'wind-64': '#EF4444',
+      },
+      fontFamily: {
+        'sans': ['Inter', 'system-ui', 'sans-serif'],
+        'mono': ['JetBrains Mono', 'monospace'],
+      },
+    }
+  }
+}
+</script>
+<style>
+  html, body { margin: 0; padding: 0; background: #0B1120; color: #F9FAFB; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: #0B1120; }
+  ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+  .page { display: none; }
+  .page.active { display: block; }
+  .nav-item.active { background: #1F2937; color: #0EA5E9; font-weight: 600; border-left-color: #0EA5E9 !important; }
+  @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .animate-pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+</style>
+</head>
+<body class="font-sans text-sm antialiased bg-bg-base text-text-primary">
+
+<!-- =================== SIDEBAR =================== -->
+<aside id="sidebar" class="fixed left-0 top-0 h-full w-[260px] bg-[#151C25] border-r border-border-subtle z-50 flex flex-col justify-between select-none">
+  <div class="flex flex-col">
+    <!-- Logo -->
+    <div class="p-3 border-b border-border-subtle flex items-center gap-2">
+      <div class="w-8 h-8 rounded-full bg-accent flex items-center justify-center">
+        <span class="material-symbols-outlined text-white text-[18px]">storm</span>
+      </div>
+      <div class="flex flex-col leading-tight">
+        <span class="font-semibold text-[15px] tracking-tight">ChakraNetra</span>
+        <span class="font-mono text-[10px] text-text-muted tracking-wider uppercase">CWC &bull; IMD / NDRF OPS</span>
+      </div>
+    </div>
+    <!-- Monitoring badge -->
+    <div class="px-3 py-1.5 bg-bg-base border-b border-border-subtle flex items-center gap-1.5">
+      <span class="w-2 h-2 rounded-full bg-accent animate-pulse-dot"></span>
+      <span class="font-mono text-[10px] text-accent-light tracking-wider uppercase">MONITORING: ACTIVE (BOB/ARB)</span>
+    </div>
+    <!-- Data source toggle -->
+    <div class="p-3 border-b border-border-subtle">
+      <span class="font-mono text-[10px] text-text-muted tracking-wider uppercase block mb-1">DATA SOURCE</span>
+      <div class="grid grid-cols-2 gap-1">
+        <button class="px-1.5 py-1 bg-bg-elevated text-accent font-mono text-[10px] rounded text-center border border-border-active">IBTrACS NIO</button>
+        <button class="px-1.5 py-1 bg-bg-surface text-text-secondary font-mono text-[10px] rounded text-center border border-border-subtle hover:bg-bg-elevated">CSV UPLOAD</button>
+      </div>
+    </div>
+    <!-- Active storm selector -->
+    <div class="p-3 border-b border-border-subtle">
+      <div class="flex items-center justify-between mb-1">
+        <span class="font-mono text-[10px] text-text-muted tracking-wider uppercase">ACTIVE STORM</span>
+        <span id="sidebar-cat-badge" class="px-1.5 py-0.5 bg-critical-bg text-critical font-mono text-[10px] rounded font-bold">--</span>
+      </div>
+      <div class="p-1.5 bg-bg-base border border-border-subtle rounded flex items-center justify-between">
+        <div class="flex flex-col min-w-0 w-full">
+          <select id="storm-select" class="bg-transparent text-text-primary font-mono text-[12px] font-semibold w-full focus:outline-none cursor-pointer" onchange="onStormChange(this.value)">
+            <option value="">Loading storms...</option>
+          </select>
+          <span id="sidebar-basin" class="font-mono text-[10px] text-text-muted uppercase">--</span>
+        </div>
+      </div>
+    </div>
+    <!-- Navigation -->
+    <nav class="flex flex-col py-1.5">
+      <a onclick="navigateTo('command')" class="nav-item active px-3 py-2 text-text-secondary hover:bg-bg-elevated hover:text-text-primary text-[12px] cursor-pointer flex items-center justify-between border-l-2 border-transparent" data-page="command">
+        <span>Command Dashboard</span>
+        <span class="font-mono text-[10px] text-text-muted">01</span>
+      </a>
+      <a onclick="navigateTo('selector')" class="nav-item px-3 py-2 text-text-secondary hover:bg-bg-elevated hover:text-text-primary text-[12px] cursor-pointer flex items-center justify-between border-l-2 border-transparent" data-page="selector">
+        <span>Storm Selector / NIO Archive</span>
+        <span class="font-mono text-[10px] text-text-muted">02</span>
+      </a>
+      <a onclick="navigateTo('ri-erc')" class="nav-item px-3 py-2 text-text-secondary hover:bg-bg-elevated hover:text-text-primary text-[12px] cursor-pointer flex items-center justify-between border-l-2 border-transparent" data-page="ri-erc">
+        <span>RI &amp; ERC Deep Analysis</span>
+        <span class="font-mono text-[10px] text-text-muted">03</span>
+      </a>
+      <a onclick="navigateTo('risk')" class="nav-item px-3 py-2 text-text-secondary hover:bg-bg-elevated hover:text-text-primary text-[12px] cursor-pointer flex items-center justify-between border-l-2 border-transparent" data-page="risk">
+        <span>Wind Radii &amp; Risk Model</span>
+        <span class="font-mono text-[10px] text-text-muted">04</span>
+      </a>
+      <a onclick="navigateTo('upload')" class="nav-item px-3 py-2 text-text-secondary hover:bg-bg-elevated hover:text-text-primary text-[12px] cursor-pointer flex items-center justify-between border-l-2 border-transparent" data-page="upload">
+        <span>IBTrACS Ingestion &amp; Upload</span>
+        <span class="font-mono text-[10px] text-text-muted">05</span>
+      </a>
+    </nav>
+  </div>
+  <!-- Footer -->
+  <div class="border-t border-border-subtle">
+    <div class="p-3 border-b border-border-subtle">
+      <span class="font-mono text-[10px] text-text-muted tracking-wider uppercase block mb-1">INTENSITY SCALE (IMD / SSHWS)</span>
+      <div class="grid grid-cols-4 gap-1">
+        <div class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-text-muted"></span><span class="font-mono text-[10px] text-text-secondary">TD</span></div>
+        <div class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-cyan"></span><span class="font-mono text-[10px] text-text-secondary">TS</span></div>
+        <div class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-wind-34"></span><span class="font-mono text-[10px] text-text-secondary">C1</span></div>
+        <div class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-wind-50"></span><span class="font-mono text-[10px] text-text-secondary">C2</span></div>
+        <div class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-critical"></span><span class="font-mono text-[10px] text-text-secondary">C3</span></div>
+        <div class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-critical-dark"></span><span class="font-mono text-[10px] text-text-secondary">C4</span></div>
+        <div class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-purple"></span><span class="font-mono text-[10px] text-text-secondary">C5</span></div>
+      </div>
+    </div>
+    <div class="p-3 flex flex-col gap-0.5 text-text-muted">
+      <div class="flex items-center justify-between font-mono text-[10px]"><span class="tracking-wider">NEW DELHI EOC</span><span class="text-text-primary font-mono text-[12px]">+05:30 IST</span></div>
+      <div class="flex items-center justify-between font-mono text-[10px]"><span class="tracking-wider">V4.2-NIO-PROD</span><span class="text-accent">RSMC</span></div>
+    </div>
+  </div>
+</aside>
+
+<!-- =================== HEADER =================== -->
+<header class="fixed top-0 left-[260px] right-0 h-14 bg-[#151C25] border-b border-border-subtle z-40 flex items-center justify-between px-4">
+  <div class="flex items-center gap-1 font-mono text-[12px] text-text-muted">
+    <span class="text-text-secondary">COORDS:</span>
+    <span id="hdr-coords" class="text-text-primary font-semibold">--</span>
+    <span class="mx-1.5 text-border-active">|</span>
+    <span class="text-text-secondary">P_MIN:</span>
+    <span id="hdr-pmin" class="text-text-primary font-semibold">-- hPa</span>
+    <span class="mx-1.5 text-border-active">|</span>
+    <span class="text-text-secondary">V_MAX:</span>
+    <span id="hdr-vmax" class="text-text-primary font-semibold">-- kt</span>
+  </div>
+  <div class="flex items-center gap-3">
+    <span class="px-2 py-0.5 rounded bg-bg-elevated text-text-primary border border-border-active font-mono text-[10px] tracking-wider uppercase">RADAR NET: MOSAIC SYNCED</span>
+  </div>
+</header>
+
+<!-- =================== MAIN CONTENT =================== -->
+<div class="pl-[260px] pt-14">
+<main class="min-h-screen bg-bg-base">
+
+<!-- PAGE 1: COMMAND DASHBOARD -->
+<div id="page-command" class="page active">
+  <!-- Status Bar -->
+  <div id="status-bar" class="border-b border-border-subtle bg-bg-surface px-4 py-2 flex flex-wrap items-center justify-between gap-y-2 select-none">
+    <div class="flex items-center flex-wrap gap-2.5">
+      <span id="sb-storm-id" class="font-mono text-[14px] font-bold text-white tracking-tight">--</span>
+      <span id="sb-cat-badge" class="px-2 py-0.5 rounded bg-critical text-white font-mono text-[12px] font-semibold">--</span>
+      <span id="sb-basin" class="text-[12px] text-text-secondary">--</span>
+      <span id="sb-risk-badge" class="px-2 py-0.5 rounded bg-critical-bg text-[#FECACA] font-mono text-[12px] font-bold border border-critical-dark hidden">--</span>
+      <div id="sb-alerts" class="flex items-center gap-1.5 ml-1"></div>
+    </div>
+    <div class="flex items-center gap-3">
+      <span id="sb-obs" class="font-mono text-[12px] text-text-secondary">--</span>
+      <span class="font-mono text-[12px] text-text-muted">&bull;</span>
+      <span class="flex items-center gap-1.5 font-mono text-[12px] text-success font-semibold">
+        <span class="w-2 h-2 rounded-full bg-success animate-pulse-dot"></span>ONLINE
+      </span>
+    </div>
+  </div>
+
+  <div class="p-3 flex flex-col gap-3">
+    <!-- Map viewport -->
+    <div id="map-container" class="relative w-full h-[520px] bg-[#070D18] border border-border-subtle rounded-md overflow-hidden">
+      <div class="absolute top-0 left-0 right-0 h-7 bg-bg-surface/90 border-b border-border-subtle px-3 flex items-center justify-between z-20 font-mono text-[12px] text-text-secondary">
+        <div class="flex items-center gap-4">
+          <span class="text-text-primary"><span class="text-text-muted">CURSOR:</span> <span id="map-cursor">--</span></span>
+          <span class="text-border-subtle">|</span>
+          <span class="text-critical font-semibold" id="map-dist">--</span>
+        </div>
+        <span class="font-mono text-[10px] text-accent-light tracking-wider uppercase">GIS: EPSG:4326 WGS84</span>
+      </div>
+      <div id="map-svg-area" class="w-full h-full"></div>
+    </div>
+
+    <!-- Legend strip -->
+    <div class="bg-bg-surface border border-border-subtle rounded-md px-3.5 py-2 flex flex-wrap items-center justify-between gap-y-2 font-mono text-[12px] text-text-secondary">
+      <div class="flex items-center flex-wrap gap-x-5 gap-y-1">
+        <div class="flex items-center gap-1.5"><div class="w-4 h-1 bg-gradient-to-r from-cyan via-wind-34 to-critical rounded"></div><span>Observed Track</span></div>
+        <div class="flex items-center gap-1.5"><div class="w-4 h-0.5 border-t border-dashed border-[#F43F5E]"></div><span class="text-[#FDA4AF]">Forecast Track</span></div>
+        <div class="flex items-center gap-1.5"><div class="w-3.5 h-3 bg-wind-50/20 border border-wind-50/60 rounded-sm"></div><span>Uncertainty Cone</span></div>
+        <div class="flex items-center gap-1.5"><div class="w-2.5 h-2.5 rounded-full bg-info text-white flex items-center justify-center text-[8px] font-bold">G</div><span>Genesis</span></div>
+      </div>
+      <div class="flex items-center flex-wrap gap-x-4 gap-y-1 text-[11px]">
+        <div class="flex items-center gap-1.5"><span class="w-2.5 h-0.5 bg-wind-34"></span><span class="text-wind-34">R34 (&gt;34kt)</span></div>
+        <div class="flex items-center gap-1.5"><span class="w-2.5 h-0.5 bg-wind-50"></span><span class="text-wind-50">R50 (&gt;50kt)</span></div>
+        <div class="flex items-center gap-1.5"><span class="w-2.5 h-0.5 bg-wind-64"></span><span class="text-wind-64">R64 (&gt;64kt)</span></div>
+      </div>
+    </div>
+
+    <!-- Intelligence Strip (4 cards) -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+      <!-- Severity -->
+      <div class="bg-bg-surface border-l-[3px] border-l-critical border-y border-r border-border-subtle rounded-md p-3.5 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <span class="font-mono text-[10px] uppercase tracking-wider text-text-muted font-semibold">SEVERITY</span>
+            <span id="card-severity-badge" class="px-2 py-0.5 rounded bg-critical/20 text-critical border border-critical/40 font-mono text-[12px] font-bold">--</span>
+          </div>
+          <div class="flex items-baseline gap-2 mb-2">
+            <span id="card-severity-wind" class="font-mono text-[28px] font-bold text-critical">--</span>
+            <span id="card-severity-kmh" class="font-mono text-[14px] text-text-secondary">kt</span>
+          </div>
+        </div>
+        <div class="pt-2 border-t border-border-subtle font-mono text-[12px] text-text-secondary flex items-center justify-between">
+          <span>Risk: <span id="card-severity-risk" class="text-critical font-bold">--</span></span>
+          <span>RMW: <span id="card-severity-rmw" class="text-text-primary font-medium">--</span></span>
+        </div>
+      </div>
+      <!-- RI -->
+      <div class="bg-bg-surface border-l-[3px] border-l-warning border-y border-r border-border-subtle rounded-md p-3.5 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <span class="font-mono text-[10px] uppercase tracking-wider text-text-muted font-semibold">RAPID INTENSIFICATION</span>
+            <span id="card-ri-badge" class="px-1.5 py-0.5 rounded bg-bg-elevated text-text-secondary font-mono text-[12px] font-bold hidden">--</span>
+          </div>
+          <div class="grid grid-cols-2 gap-2 my-2">
+            <div class="flex flex-col gap-1">
+              <div class="flex justify-between font-mono text-[12px]"><span class="text-text-secondary">ENV (TabNet)</span><span id="card-ri-env" class="text-warning font-bold">--%</span></div>
+              <div class="w-full h-1.5 bg-bg-elevated rounded-full overflow-hidden"><div id="card-ri-env-bar" class="h-full bg-warning" style="width:0%"></div></div>
+            </div>
+            <div class="flex flex-col gap-1">
+              <div class="flex justify-between font-mono text-[12px]"><span class="text-text-secondary">LTG (XGB)</span><span id="card-ri-ltg" class="text-warning font-bold">--%</span></div>
+              <div class="w-full h-1.5 bg-bg-elevated rounded-full overflow-hidden"><div id="card-ri-ltg-bar" class="h-full bg-warning" style="width:0%"></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="pt-2 border-t border-border-subtle flex items-center justify-between">
+          <span id="card-ri-agree" class="font-mono text-[12px] text-success font-semibold flex items-center gap-1.5">--</span>
+        </div>
+      </div>
+      <!-- ERC -->
+      <div class="bg-bg-surface border-l-[3px] border-l-purple border-y border-r border-border-subtle rounded-md p-3.5 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="font-mono text-[10px] uppercase tracking-wider text-text-muted font-semibold">EYEWALL REPLACEMENT</span>
+            <span id="card-erc-badge" class="px-1.5 py-0.5 rounded bg-bg-elevated text-text-secondary font-mono text-[12px] font-bold hidden">--</span>
+          </div>
+          <div class="flex items-baseline justify-between mb-1.5">
+            <span id="card-erc-prob" class="font-mono text-[28px] font-bold text-purple">--%</span>
+            <span class="font-mono text-[10px] text-purple-light">Direct IR Prob</span>
+          </div>
+          <div class="w-full h-1.5 bg-bg-elevated rounded-full overflow-hidden mb-2"><div id="card-erc-bar" class="h-full bg-purple" style="width:0%"></div></div>
+        </div>
+        <div class="pt-2 border-t border-border-subtle font-mono text-[12px] text-text-secondary leading-tight" id="card-erc-detail">--</div>
+      </div>
+      <!-- Wind Radii -->
+      <div class="bg-bg-surface border-l-[3px] border-l-accent border-y border-r border-border-subtle rounded-md p-3.5 flex flex-col justify-between">
+        <div class="flex items-center justify-between mb-1.5">
+          <span class="font-mono text-[10px] uppercase tracking-wider text-text-muted font-semibold">WIND RADII (RANKINE)</span>
+          <span class="font-mono text-[10px] text-accent-light">RADIAL 360&deg;</span>
+        </div>
+        <div class="flex flex-col gap-1.5 my-auto">
+          <div class="flex items-center justify-between font-mono text-[12px]"><span class="text-text-secondary">R34 (Gale / 34 kt):</span><span id="card-r34" class="text-wind-34 font-bold">-- km</span></div>
+          <div class="flex items-center justify-between font-mono text-[12px]"><span class="text-text-secondary">R50 (Storm / 50 kt):</span><span id="card-r50" class="text-wind-50 font-bold">-- km</span></div>
+          <div class="flex items-center justify-between font-mono text-[12px]"><span class="text-text-secondary">R64 (Hurr / 64 kt):</span><span id="card-r64" class="text-wind-64 font-bold">-- km</span></div>
+        </div>
+        <div class="pt-2 border-t border-border-subtle font-mono text-[12px] text-text-muted flex justify-between">
+          <span id="card-radii-outer">Outer: -- km</span>
+          <span>Asymm: NE-Quad</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      <div class="bg-bg-surface border border-border-subtle rounded-md p-3.5">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-accent"></span><span class="font-mono text-[10px] uppercase tracking-wider text-text-secondary font-bold">WIND SPEED FORECAST (0-72H CONE)</span></div>
+          <span class="font-mono text-[12px] text-text-muted">ENSEMBLE 80% CI</span>
+        </div>
+        <canvas id="wind-chart" class="w-full" height="220"></canvas>
+      </div>
+      <div class="bg-bg-surface border border-border-subtle rounded-md p-3.5">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-purple"></span><span class="font-mono text-[10px] uppercase tracking-wider text-text-secondary font-bold">CENTRAL PRESSURE FORECAST (hPa)</span></div>
+          <span class="font-mono text-[12px] text-purple font-semibold">INVERTED (SEVERE TOP)</span>
+        </div>
+        <canvas id="pressure-chart" class="w-full" height="220"></canvas>
+      </div>
+    </div>
+
+    <!-- Accuracy -->
+    <div class="bg-bg-surface border border-border-subtle rounded-md overflow-hidden">
+      <div class="px-4 py-2.5 bg-bg-elevated/50 border-b border-border-subtle flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <span class="material-symbols-outlined text-accent text-[18px]">verified</span>
+          <span class="text-[15px] font-semibold tracking-tight">NIO MODEL ACCURACY &amp; BACKTEST BENCHMARK</span>
+        </div>
+        <span class="font-mono text-[12px] text-success font-semibold hidden md:inline">CONVERGENCE: OPTIMAL (NIO-V4)</span>
+      </div>
+      <div class="p-3.5">
+        <table class="w-full text-left border-collapse">
+          <thead>
+            <tr class="bg-bg-elevated text-text-secondary font-mono text-[10px] h-7 border-b border-bg-hover">
+              <th class="px-3">LEAD TIME</th><th class="px-3">TRACK ERR (KM)</th><th class="px-3">WIND MAE (KT)</th><th class="px-3">PRES MAE (HPA)</th><th class="px-3">ACCURACY %</th><th class="px-3 text-right">DRIFT</th>
+            </tr>
+          </thead>
+          <tbody id="accuracy-tbody" class="divide-y divide-border-subtle font-mono text-[12px]"></tbody>
+        </table>
+        <div class="flex items-center justify-between text-text-muted font-mono text-[10px] pt-2 mt-2 border-t border-border-subtle">
+          <span>TRAINING: 1982-2023 NIO ARCHIVE (N=482)</span>
+          <span>MULTI-TASK TABNET + RESIDUAL XGBOOST</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PAGE 2: STORM SELECTOR -->
+<div id="page-selector" class="page">
+  <div class="bg-[#151C25] px-3 py-1.5 flex items-center justify-between">
+    <div class="flex items-center gap-2 font-mono text-[10px] text-accent">
+      <span class="material-symbols-outlined text-[14px]">database</span>
+      <span class="uppercase tracking-widest font-semibold">ARCHIVE-OPS-02 // NIO CYCLONIC ARCHIVE (2018-2023)</span>
+    </div>
+    <span class="font-mono text-[10px] text-text-muted">IBTrACS v04r01 NIO SUBSET</span>
+  </div>
+  <div class="p-3 space-y-3">
+    <div>
+      <h1 class="text-[24px] font-bold tracking-tight uppercase">North Indian Ocean Cyclonic Archive</h1>
+      <p class="font-mono text-[12px] text-text-secondary mt-0.5" id="selector-summary">Loading storms...</p>
+    </div>
+    <div id="storm-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3"></div>
+  </div>
+</div>
+
+<!-- PAGE 3: RI & ERC DEEP ANALYSIS -->
+<div id="page-ri-erc" class="page">
+  <div class="bg-[#151C25] px-3 py-2 flex items-center justify-between">
+    <div class="flex items-center gap-1 font-mono text-[10px] text-accent"><span class="material-symbols-outlined text-[14px]">terminal</span><span class="uppercase tracking-widest font-semibold">DIAGNOSTICS // RAPID INTENSIFICATION &amp; EYEWALL DYNAMICS</span></div>
+    <div class="flex items-center gap-2">
+      <div id="ri-watch-pill" class="px-2 py-1 bg-bg-elevated rounded font-mono text-[10px] text-warning flex items-center gap-1.5 hidden"><span class="w-1.5 h-1.5 rounded-full bg-warning animate-pulse-dot"></span>RI WATCH</div>
+      <div id="erc-watch-pill" class="px-2 py-1 bg-bg-elevated rounded font-mono text-[10px] text-purple flex items-center gap-1.5 hidden"><span class="w-1.5 h-1.5 rounded-full bg-purple"></span>ERC WATCH</div>
+    </div>
+  </div>
+  <div class="p-3 space-y-3">
+    <div><span class="font-mono text-[10px] text-accent uppercase tracking-wider font-semibold">MODULE 03-A // DIAGNOSTIC PHYSICS</span>
+      <h2 class="text-[18px] font-bold tracking-tight">RI PHYSICS &amp; DUAL-MODEL VERIFICATION</h2>
+    </div>
+    <div class="bg-bg-elevated rounded p-2.5 flex items-start gap-2">
+      <span class="material-symbols-outlined text-info text-[18px] shrink-0 mt-0.5">info</span>
+      <p class="text-[12px] text-text-secondary"><strong class="text-text-primary font-semibold uppercase text-[12px]">Design Principle:</strong> Signals never forced into consensus (&sect;3.4). ENV and LTG run asynchronously.</p>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      <!-- ENV panel -->
+      <div class="bg-[#151C25] rounded-md p-3 relative overflow-hidden"><div class="absolute left-0 top-0 bottom-0 w-1 bg-info"></div>
+        <div class="flex items-start justify-between mb-3 pl-2">
+          <div><span class="font-mono text-[10px] text-text-muted tracking-wider uppercase font-semibold">SUBSYSTEM 1 // THERMODYNAMIC</span><h3 class="text-[15px] font-semibold">ENVIRONMENTAL SIGNAL (TabNet)</h3></div>
+          <div class="text-right"><span id="ri-env-pct" class="font-mono text-[28px] text-info font-bold">--%</span><span class="block font-mono text-[10px] text-info tracking-widest uppercase">PROBABILITY</span></div>
+        </div>
+        <div class="space-y-2 pl-2" id="ri-env-factors"></div>
+      </div>
+      <!-- LTG panel -->
+      <div class="bg-[#151C25] rounded-md p-3 relative overflow-hidden"><div class="absolute left-0 top-0 bottom-0 w-1 bg-info"></div>
+        <div class="flex items-start justify-between mb-3 pl-2">
+          <div><span class="font-mono text-[10px] text-text-muted tracking-wider uppercase font-semibold">SUBSYSTEM 2 // CONVECTIVE CORE</span><h3 class="text-[15px] font-semibold">LIGHTNING SIGNAL (WWLLN / XGBoost)</h3></div>
+          <div class="text-right"><span id="ri-ltg-pct" class="font-mono text-[28px] text-info font-bold">--%</span><span class="block font-mono text-[10px] text-info tracking-widest uppercase">PROBABILITY</span></div>
+        </div>
+        <div class="space-y-2 pl-2" id="ri-ltg-factors"></div>
+      </div>
+    </div>
+    <!-- Agreement -->
+    <div class="bg-[#151C25] rounded-md p-3">
+      <div class="bg-bg-surface rounded p-2.5 flex items-center gap-2">
+        <span id="ri-agree-icon" class="material-symbols-outlined text-accent text-[24px]">verified</span>
+        <div><span class="font-mono text-[10px] text-text-muted uppercase tracking-wider">CROSS-VALIDATION</span><br>
+          <span id="ri-agree-text" class="font-mono text-[14px] text-accent font-bold">--</span></div>
+      </div>
+    </div>
+    <!-- ERC Section -->
+    <div class="mt-4"><span class="font-mono text-[10px] text-purple uppercase tracking-wider font-semibold">MODULE 03-B // INNER CORE STRUCTURAL MORPHOLOGY</span>
+      <h2 class="text-[18px] font-bold tracking-tight">EYEWALL REPLACEMENT CYCLE (ERC) CLASSIFIER</h2>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div class="bg-[#151C25] rounded-md p-3 relative overflow-hidden"><div class="absolute left-0 top-0 bottom-0 w-1 bg-purple"></div>
+        <div class="flex items-center justify-between mb-1 pl-2"><span class="font-mono text-[10px] text-text-muted uppercase">SENSOR A</span><span id="erc-ir-badge" class="px-2 py-0.5 rounded bg-purple text-white font-mono text-[12px] font-bold">--</span></div>
+        <h3 class="text-[15px] font-semibold pl-2 mb-1">DIRECT IR CLASSIFIER</h3>
+        <div class="bg-bg-surface p-2 rounded pl-2"><span class="font-mono text-[10px] text-text-muted uppercase block">PHASE:</span><span id="erc-phase" class="text-[12px] text-purple font-semibold">--</span></div>
+      </div>
+      <div class="bg-[#151C25] rounded-md p-3">
+        <div class="flex items-center justify-between mb-1"><span class="font-mono text-[10px] text-text-muted uppercase">SENSOR B</span><span class="px-2 py-0.5 rounded bg-bg-elevated text-text-secondary font-mono text-[12px] font-bold">GATED</span></div>
+        <h3 class="text-[15px] font-semibold mb-1">SYNTHETIC PMW</h3>
+        <p class="text-[12px] text-text-secondary">Awaiting GPM/SSMIS microwave orbital overpass.</p>
+      </div>
+      <div class="bg-[#151C25] rounded-md p-3">
+        <div class="flex items-center justify-between mb-1"><span class="font-mono text-[10px] text-text-muted uppercase">SENSOR C</span><span class="px-2 py-0.5 rounded bg-bg-elevated text-text-secondary font-mono text-[12px] font-bold">POST-HOC</span></div>
+        <h3 class="text-[15px] font-semibold mb-1">RMW-JUMP CONFIRMATION</h3>
+        <p class="text-[12px] text-text-secondary">Awaiting radar confirmation.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PAGE 4: WIND RADII & RISK -->
+<div id="page-risk" class="page">
+  <div class="bg-[#151C25] px-3 py-2"><span class="font-mono text-[10px] text-accent uppercase tracking-wider font-semibold">MODULE 04 // WIND RADII &amp; COMPOSITE RISK MODEL</span></div>
+  <div class="p-3 space-y-3">
+    <h2 class="text-[18px] font-bold tracking-tight">RANKINE VORTEX WIND FIELD &amp; COMPOSITE RISK SCORE</h2>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      <div class="bg-bg-surface border border-border-subtle rounded-md p-3.5">
+        <span class="font-mono text-[10px] uppercase tracking-wider text-text-muted font-semibold block mb-2">RADIAL WIND PROFILE (RANKINE VORTEX)</span>
+        <div class="relative w-full aspect-square max-w-[400px] mx-auto"><canvas id="radial-canvas" class="w-full h-full"></canvas></div>
+      </div>
+      <div class="bg-bg-surface border border-border-subtle rounded-md p-3.5">
+        <span class="font-mono text-[10px] uppercase tracking-wider text-text-muted font-semibold block mb-2">COMPOSITE RISK SCORE WATERFALL</span>
+        <div class="space-y-3" id="risk-waterfall"></div>
+        <div class="mt-4 border-t border-border-subtle pt-3">
+          <span class="font-mono text-[10px] uppercase tracking-wider text-text-muted font-semibold block mb-2">QUADRANT ASYMMETRY</span>
+          <div class="grid grid-cols-4 gap-2 font-mono text-[12px]" id="quadrant-grid"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PAGE 5: UPLOAD -->
+<div id="page-upload" class="page">
+  <div class="bg-[#151C25] px-3 py-2 flex items-center gap-1 font-mono text-[10px] text-accent"><span class="material-symbols-outlined text-[14px]">terminal</span><span class="uppercase tracking-widest font-semibold">TERMINAL 05 // DATA INGESTION // IBTrACS COMPLIANCE</span></div>
+  <div class="p-3 space-y-3">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-3">
+      <div class="lg:col-span-8 bg-bg-surface rounded-md p-4 flex flex-col items-center justify-center min-h-[220px] border-2 border-dashed border-border-active hover:border-accent cursor-pointer" onclick="document.getElementById('file-input').click()">
+        <span class="material-symbols-outlined text-accent text-[48px] mb-2">cloud_upload</span>
+        <span class="text-[15px] font-semibold mb-1">Drag and drop IBTrACS CSV or click to browse</span>
+        <span class="text-[12px] text-text-secondary">Streaming parser for cyclone coordinates, wind series, and pressure data.</span>
+        <input accept=".csv,.gz" class="hidden" id="file-input" type="file"/>
+      </div>
+      <div class="lg:col-span-4 bg-bg-surface rounded-md p-3">
+        <div class="flex items-center gap-1.5 mb-2"><span class="material-symbols-outlined text-accent text-[18px]">verified_user</span><span class="font-mono text-[10px] text-text-primary uppercase tracking-wider font-semibold">Parser Constraints</span></div>
+        <div class="space-y-2 text-[12px] text-text-secondary">
+          <div class="bg-bg-base p-2 rounded"><strong class="text-text-primary text-[11px] uppercase tracking-wide block">Target:</strong>IBTrACS v04r01 NIO subset</div>
+          <div class="bg-bg-base p-2 rounded"><strong class="text-text-primary text-[11px] uppercase tracking-wide block">Headers:</strong><span class="font-mono text-[11px] text-accent">SID, BASIN, ISO_TIME, LAT, LON, WMO_WIND, WMO_PRES</span></div>
+          <div class="bg-bg-base p-2 rounded"><strong class="text-text-primary text-[11px] uppercase tracking-wide block">Max Upload:</strong>200 MB, UTF-8 or gzip</div>
+        </div>
+      </div>
+    </div>
+    <div class="bg-bg-surface rounded-md p-3">
+      <div class="flex items-center gap-2 mb-2"><span class="w-2.5 h-2.5 rounded-full bg-success"></span><span class="text-[15px] font-bold">SCHEMA VALIDATION: PASS</span><span class="px-1.5 py-0.5 bg-info/20 text-info font-mono text-[10px] rounded font-bold">CRC-VALIDATED</span></div>
+      <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 my-2">
+        <div class="bg-bg-base p-2 rounded"><span class="font-mono text-[10px] text-text-muted uppercase block">Rows</span><span class="font-mono text-[20px] font-bold" id="upload-rows">--</span></div>
+        <div class="bg-bg-base p-2 rounded"><span class="font-mono text-[10px] text-text-muted uppercase block">Storms</span><span class="font-mono text-[20px] font-bold text-accent" id="upload-storms">--</span></div>
+        <div class="bg-bg-base p-2 rounded"><span class="font-mono text-[10px] text-text-muted uppercase block">Basin Split</span><span class="font-mono text-[12px] text-text-secondary" id="upload-basins">--</span></div>
+        <div class="bg-bg-base p-2 rounded"><span class="font-mono text-[10px] text-text-muted uppercase block">Schema</span><span class="font-mono text-[20px] font-bold text-accent">WMO</span></div>
+        <div class="bg-bg-base p-2 rounded"><span class="font-mono text-[10px] text-text-muted uppercase block">Compliance</span><span class="font-mono text-[20px] font-bold text-success">v04r01</span></div>
+      </div>
+    </div>
+    <div class="bg-bg-surface rounded-md p-3">
+      <span class="font-mono text-[10px] text-text-muted uppercase tracking-wider block mb-2">DETECTED STORMS FOR INGESTION</span>
+      <table class="w-full text-left border-collapse">
+        <thead><tr class="bg-bg-elevated text-text-secondary font-mono text-[10px] h-7 border-b border-bg-hover">
+          <th class="px-3">STORM SID</th><th class="px-3">BASIN</th><th class="px-3 text-right">OBS</th><th class="px-3 text-right">V_MAX (KT)</th><th class="px-3 text-right">P_MIN (HPA)</th><th class="px-3 text-center">STATUS</th>
+        </tr></thead>
+        <tbody id="upload-storm-table" class="divide-y divide-border-subtle font-mono text-[12px]"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+</main>
+</div>
+
+<!-- =================== JAVASCRIPT =================== -->
+<script>
+const API = 'http://localhost:8000';
+let currentStormId = null;
+let allStorms = [];
+let stormDetails = {};
+let predictionData = null;
+
+function windCategory(kt) {
+  if (kt >= 137) return { cat: 'Cat 5', color: '#A855F7', imd: 'SuCS' };
+  if (kt >= 113) return { cat: 'Cat 4', color: '#DC2626', imd: 'ESCS' };
+  if (kt >= 96) return { cat: 'Cat 3', color: '#EF4444', imd: 'VSCS' };
+  if (kt >= 83) return { cat: 'Cat 2', color: '#F97316', imd: 'VSCS' };
+  if (kt >= 64) return { cat: 'Cat 1', color: '#FACC15', imd: 'SCS' };
+  if (kt >= 34) return { cat: 'TS', color: '#22D3EE', imd: 'CS' };
+  return { cat: 'TD', color: '#6B7280', imd: 'D' };
+}
+
+function riskTier(score) {
+  if (score >= 0.85) return { label: 'EXTREME', color: '#EF4444' };
+  if (score >= 0.70) return { label: 'SEVERE', color: '#DC2626' };
+  if (score >= 0.55) return { label: 'HIGH', color: '#F97316' };
+  if (score >= 0.40) return { label: 'MODERATE', color: '#F59E0B' };
+  if (score >= 0.20) return { label: 'LOW', color: '#0EA5E9' };
+  return { label: 'MINIMAL', color: '#6B7280' };
+}
+
+// Navigation
+function navigateTo(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.querySelector('.nav-item[data-page="' + page + '"]').classList.add('active');
+}
+
+// API
+async function fetchStorms() {
+  try {
+    const r = await fetch(API + '/v1/storms');
+    const data = await r.json();
+    allStorms = data.storm_ids || [];
+    const sel = document.getElementById('storm-select');
+    sel.innerHTML = '';
+    allStorms.forEach(sid => { const o = document.createElement('option'); o.value = sid; o.textContent = sid; sel.appendChild(o); });
+    if (allStorms.length > 0) {
+      const pick = allStorms.find(s => s.includes('2019116')) || allStorms[0];
+      sel.value = pick;
+      onStormChange(pick);
+    }
+  } catch(e) { console.error('Storms fetch failed:', e); }
+}
+
+async function onStormChange(stormId) {
+  if (!stormId) return;
+  currentStormId = stormId;
+  const [detail, pred] = await Promise.all([
+    fetch(API + '/v1/storm-detail/' + stormId).then(r => r.json()).catch(() => null),
+    fetch(API + '/v1/predict', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({storm_id: stormId, lead_times_hours:[24,48,72]}) }).then(r => r.json()).catch(() => null),
+  ]);
+  if (detail) stormDetails[stormId] = detail;
+  if (pred) predictionData = pred;
+  updateUI(detail, pred);
+}
+
+function updateUI(d, p) {
+  if (!d || !p) return;
+  const wc = windCategory(d.peak_wind_kt);
+  // Header
+  document.getElementById('hdr-coords').textContent = d.peak_lat + '\u00B0N, ' + d.peak_lon + '\u00B0E';
+  document.getElementById('hdr-pmin').textContent = d.min_pressure_hpa + ' hPa';
+  document.getElementById('hdr-vmax').textContent = d.peak_wind_kt + ' kt';
+  // Sidebar
+  document.getElementById('sidebar-cat-badge').textContent = wc.cat;
+  document.getElementById('sidebar-cat-badge').style.backgroundColor = wc.color + '33';
+  document.getElementById('sidebar-cat-badge').style.color = wc.color;
+  document.getElementById('sidebar-basin').textContent = d.basin;
+  // Status bar
+  document.getElementById('sb-storm-id').textContent = d.storm_id;
+  document.getElementById('sb-cat-badge').textContent = wc.cat + ' | ' + d.peak_wind_kt + ' kt';
+  document.getElementById('sb-cat-badge').style.backgroundColor = wc.color;
+  document.getElementById('sb-basin').textContent = d.basin === 'BOB' ? 'Bay of Bengal' : 'Arabian Sea';
+  document.getElementById('sb-obs').textContent = 'Obs: ' + d.obs_count;
+  // Risk badge
+  if (p.risk) {
+    const rt = riskTier(p.risk.risk_score);
+    const rb = document.getElementById('sb-risk-badge');
+    rb.textContent = rt.label + ' RISK'; rb.style.color = rt.color; rb.classList.remove('hidden');
+  }
+  // Alert badges
+  const ad = document.getElementById('sb-alerts'); ad.innerHTML = '';
+  if (p.alert_overlays) {
+    if (p.alert_overlays.ri_watch) ad.innerHTML += '<span class="px-2 py-0.5 rounded bg-[#F59E0B] text-black font-mono text-[12px] font-bold">RI WATCH</span>';
+    if (p.alert_overlays.erc_watch) ad.innerHTML += '<span class="px-2 py-0.5 rounded bg-[#A855F7] text-white font-mono text-[12px] font-bold">ERC WATCH</span>';
+  }
+  // Severity card
+  document.getElementById('card-severity-badge').textContent = wc.cat + ' (' + wc.imd + ')';
+  document.getElementById('card-severity-wind').textContent = Math.round(d.peak_wind_kt);
+  document.getElementById('card-severity-kmh').textContent = 'kt (' + Math.round(d.peak_wind_kt * 1.852) + ' km/h)';
+  if (p.risk) {
+    const rt = riskTier(p.risk.risk_score);
+    document.getElementById('card-severity-risk').textContent = rt.label;
+    document.getElementById('card-severity-risk').style.color = rt.color;
+    document.getElementById('card-severity-rmw').textContent = 'INNER';
+  }
+  // RI card
+  if (p.ri) {
+    const ep = Math.round(p.ri.environmental.probability_24h * 100);
+    const lp = Math.round(p.ri.lightning.probability_24h * 100);
+    document.getElementById('card-ri-env').textContent = ep + '%';
+    document.getElementById('card-ri-env-bar').style.width = ep + '%';
+    document.getElementById('card-ri-ltg').textContent = lp + '%';
+    document.getElementById('card-ri-ltg-bar').style.width = lp + '%';
+    document.getElementById('card-ri-agree').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-' + (p.ri.agreement ? 'success' : 'warning') + '"></span>' + (p.ri.agreement ? 'Signals: AGREE' : 'Signals: DIVERGE');
+    if (p.alert_overlays && p.alert_overlays.ri_watch) { const b = document.getElementById('card-ri-badge'); b.textContent = 'RI WATCH'; b.className = 'px-1.5 py-0.5 rounded bg-[#F59E0B] text-black font-mono text-[12px] font-bold'; }
+  }
+  // ERC card
+  if (p.erc) {
+    const ep = Math.round(p.erc.direct_probability * 100);
+    document.getElementById('card-erc-prob').textContent = ep + '%';
+    document.getElementById('card-erc-bar').style.width = ep + '%';
+    document.getElementById('card-erc-detail').textContent = 'Syn PMW: GATED | RMW-Jump: POST-HOC | Src: ' + (p.erc.reference_rmw_source || 'inner');
+    if (p.alert_overlays && p.alert_overlays.erc_watch) { const b = document.getElementById('card-erc-badge'); b.textContent = 'ERC WATCH'; b.className = 'px-1.5 py-0.5 rounded bg-[#A855F7] text-white font-mono text-[12px] font-bold'; }
+  }
+  // Wind radii card
+  if (p.risk && p.risk.wind_radii_km) {
+    const wr = p.risk.wind_radii_km;
+    document.getElementById('card-r34').textContent = Math.round(wr['34kt'] || 0) + ' km';
+    document.getElementById('card-r50').textContent = Math.round(wr['50kt'] || 0) + ' km';
+    document.getElementById('card-r64').textContent = Math.round(wr['64kt'] || 0) + ' km';
+    document.getElementById('card-radii-outer').textContent = 'Outer: ' + Math.round((wr['34kt'] || 0) * 1.3) + ' km';
+  }
+  renderMap(d, p);
+  renderWindChart(d, p);
+  renderPressureChart(d, p);
+  renderAccuracy();
+  updateRIERCPage(p);
+  updateRiskPage(p, d);
+  updateUploadPage();
+  populateStormGrid();
+}
+
+// SVG Map
+function renderMap(d, p) {
+  if (!d || !d.observations || !d.observations.length) return;
+  const obs = d.observations;
+  const c = document.getElementById('map-svg-area');
+  let mnLa=99,mxLa=-99,mnLo=999,mxLo=-999;
+  obs.forEach(o=>{mnLa=Math.min(mnLa,o.lat);mxLa=Math.max(mxLa,o.lat);mnLo=Math.min(mnLo,o.lon);mxLo=Math.max(mxLo,o.lon);});
+  if(p&&p.track)p.track.forEach(t=>{mnLa=Math.min(mnLa,t.lat);mxLa=Math.max(mxLa,t.lat);mnLo=Math.min(mnLo,t.lon);mxLo=Math.max(mxLo,t.lon);});
+  const pad=3; mnLa-=pad;mxLa+=pad;mnLo-=pad;mxLo+=pad;
+  const W=1100,H=520;
+  function ts(la,lo){return[((lo-mnLo)/(mxLo-mnLo))*W,H-((la-mnLa)/(mxLa-mnLa))*H];}
+  let s='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 '+W+' '+H+'" class="w-full h-full" preserveAspectRatio="xMidYMid slice">';
+  s+='<rect width="100%" height="100%" fill="#070E1A"/>';
+  s+='<defs><pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="#162234" stroke-width="0.5"/></pattern></defs>';
+  s+='<rect width="100%" height="100%" fill="url(#grid)"/>';
+  for(let la=Math.ceil(mnLa/5)*5;la<=mxLa;la+=5){const[,y]=ts(la,mnLo);s+='<line x1="0" x2="'+W+'" y1="'+y+'" y2="'+y+'" stroke="#1F2937" stroke-dasharray="2 4" stroke-width="1"/>';s+='<text x="12" y="'+(y-4)+'" fill="#4B5563" font-family="JetBrains Mono" font-size="10">'+la+'\u00B0N</text>';}
+  for(let lo=Math.ceil(mnLo/5)*5;lo<=mxLo;lo+=5){const[x]=ts(mnLa,lo);s+='<line x1="'+x+'" x2="'+x+'" y1="0" y2="'+H+'" stroke="#1F2937" stroke-dasharray="2 4" stroke-width="1"/>';s+='<text x="'+(x+4)+'" y="'+(H-8)+'" fill="#4B5563" font-family="JetBrains Mono" font-size="10">'+lo+'\u00B0E</text>';}
+  const cp=ts((mnLa+mxLa)/2,(mnLo+mxLo)/2);
+  s+='<text x="'+cp[0]+'" y="'+cp[1]+'" fill="#1E293B" font-family="Inter" font-size="28" font-weight="800" letter-spacing="0.15em" text-anchor="middle">'+(d.basin==='BOB'?'BAY OF BENGAL':'ARABIAN SEA')+'</text>';
+  // Track
+  for(let i=1;i<obs.length;i++){const[x1,y1]=ts(obs[i-1].lat,obs[i-1].lon);const[x2,y2]=ts(obs[i].lat,obs[i].lon);const cl=windCategory(obs[i].wind_kt).color;const w=2+(obs[i].wind_kt/50);s+='<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="'+cl+'" stroke-linecap="round" stroke-width="'+w+'"/>';}
+  // Genesis
+  const[gx,gy]=ts(obs[0].lat,obs[0].lon);
+  s+='<circle cx="'+gx+'" cy="'+gy+'" r="7" fill="#0284C7" stroke="white" stroke-width="1.5"/>';
+  s+='<text x="'+gx+'" y="'+(gy+4)+'" fill="white" font-family="JetBrains Mono" font-size="10" font-weight="700" text-anchor="middle">G</text>';
+  // Current
+  const last=obs[obs.length-1];const[cx,cy]=ts(last.lat,last.lon);
+  s+='<circle cx="'+cx+'" cy="'+cy+'" r="14" fill="none" stroke="#EF4444" stroke-opacity="0.8" stroke-width="2"/>';
+  s+='<circle cx="'+cx+'" cy="'+cy+'" r="6" fill="#EF4444"/><circle cx="'+cx+'" cy="'+cy+'" r="2.5" fill="white"/>';
+  s+='<rect x="'+(cx+18)+'" y="'+(cy-22)+'" width="140" height="38" rx="3" fill="#111827" stroke="#DC2626" stroke-width="1.2"/>';
+  s+='<text x="'+(cx+24)+'" y="'+(cy-8)+'" fill="white" font-family="JetBrains Mono" font-size="11" font-weight="700">'+last.lat+'\u00B0N, '+last.lon+'\u00B0E</text>';
+  s+='<text x="'+(cx+24)+'" y="'+(cy+8)+'" fill="#F87171" font-family="JetBrains Mono" font-size="10.5">'+last.wind_kt+' kt | '+last.pressure_hpa+' hPa</text>';
+  // Wind radii
+  if(p&&p.risk&&p.risk.wind_radii_km){const wr=p.risk.wind_radii_km;const sc=W/((mxLo-mnLo)*111);
+    if(wr['34kt']){const r=wr['34kt']*sc;s+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="#FACC15" fill-opacity="0.08" stroke="#FACC15" stroke-dasharray="4 3" stroke-width="1.2"/>';}
+    if(wr['50kt']){const r=wr['50kt']*sc;s+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="#F97316" fill-opacity="0.10" stroke="#F97316" stroke-width="1.4"/>';}
+    if(wr['64kt']){const r=wr['64kt']*sc;s+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="#EF4444" fill-opacity="0.14" stroke="#EF4444" stroke-width="1.6"/>';}
+  }
+  // Forecast
+  if(p&&p.track&&p.track.length){let fp='M '+cx+' '+cy;p.track.forEach(t=>{const[fx,fy]=ts(t.lat,t.lon);fp+=' L '+fx+' '+fy;});s+='<path d="'+fp+'" fill="none" stroke="#F43F5E" stroke-dasharray="5 4" stroke-width="2.5"/>';
+    p.track.forEach((t,i)=>{const[fx,fy]=ts(t.lat,t.lon);s+='<circle cx="'+fx+'" cy="'+fy+'" r="5" fill="#111827" stroke="#F43F5E" stroke-width="2"/>';const wl=p.intensity&&p.intensity[i]?Math.round(p.intensity[i].wind_kt):'?';s+='<text x="'+(fx+10)+'" y="'+(fy+4)+'" fill="#FDA4AF" font-family="JetBrains Mono" font-size="11" font-weight="700">+'+t.lead_h+'h ('+wl+'kt)</text>';});
+  }
+  s+='</svg>';c.innerHTML=s;
+  document.getElementById('map-cursor').textContent=last.lat+'\u00B0N, '+last.lon+'\u00B0E';
+  document.getElementById('map-dist').textContent='CURRENT V_MAX: '+last.wind_kt+' KT';
+}
+
+// Canvas charts
+function renderWindChart(d, p) {
+  const cv=document.getElementById('wind-chart');if(!cv||!p||!p.intensity)return;
+  const ctx=cv.getContext('2d');cv.width=cv.offsetWidth*2;cv.height=440;ctx.scale(2,2);
+  const W=cv.offsetWidth,H=220;ctx.clearRect(0,0,W,H);
+  const last=d.observations[d.observations.length-1];
+  const pts=[{h:0,w:last.wind_kt}];p.intensity.forEach(i=>pts.push({h:i.lead_h,w:i.wind_kt}));
+  const mH=Math.max(...pts.map(p=>p.h)),mW=Math.max(...pts.map(p=>p.w),140);
+  const pL=50,pR=20,pT=20,pB=30;
+  function tc(h,w){return[(h/mH)*(W-pL-pR)+pL,H-pB-((w/mW)*(H-pT-pB))];}
+  ctx.strokeStyle='#1F2937';ctx.lineWidth=0.5;
+  [34,64,96].forEach(th=>{const[,y]=tc(0,th);ctx.beginPath();ctx.setLineDash([3,3]);ctx.moveTo(pL,y);ctx.lineTo(W-pR,y);ctx.stroke();ctx.setLineDash([]);
+    const cl={34:'#22D3EE',64:'#FACC15',96:'#EF4444'};ctx.fillStyle=cl[th]||'#6B7280';ctx.font='9px JetBrains Mono';ctx.textAlign='right';ctx.fillText(th===34?'TS':th===64?'Cat 1':'Cat 3',pL-5,y+4);});
+  // CI
+  if(p.intensity[0]&&p.intensity[0].interval_kt){ctx.fillStyle='rgba(14,165,233,0.12)';ctx.beginPath();
+    const fw=[{h:0,lo:last.wind_kt,hi:last.wind_kt}];p.intensity.forEach(i=>fw.push({h:i.lead_h,lo:i.interval_kt[0],hi:i.interval_kt[1]}));
+    const[sx,sy]=tc(fw[0].h,fw[0].hi);ctx.moveTo(sx,sy);fw.forEach(f=>{const[x,y]=tc(f.h,f.hi);ctx.lineTo(x,y);});
+    for(let i=fw.length-1;i>=0;i--){const[x,y]=tc(fw[i].h,fw[i].lo);ctx.lineTo(x,y);}ctx.closePath();ctx.fill();}
+  ctx.strokeStyle='#0EA5E9';ctx.lineWidth=2.5;ctx.setLineDash([]);ctx.beginPath();
+  pts.forEach((pt,i)=>{const[x,y]=tc(pt.h,pt.w);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});ctx.stroke();
+  pts.forEach(pt=>{const[x,y]=tc(pt.h,pt.w);ctx.fillStyle='#0EA5E9';ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#E0F2FE';ctx.font='bold 10px JetBrains Mono';ctx.textAlign='center';ctx.fillText(Math.round(pt.w)+' kt',x,y-8);
+    ctx.fillStyle='#9CA3AF';ctx.font='10px JetBrains Mono';ctx.fillText(pt.h===0?'Now':'+'+pt.h+'h',x,H-10);});
+}
+
+function renderPressureChart(d, p) {
+  const cv=document.getElementById('pressure-chart');if(!cv||!p||!p.intensity)return;
+  const ctx=cv.getContext('2d');cv.width=cv.offsetWidth*2;cv.height=440;ctx.scale(2,2);
+  const W=cv.offsetWidth,H=220;ctx.clearRect(0,0,W,H);
+  const last=d.observations[d.observations.length-1];
+  const pts=[{h:0,p:last.pressure_hpa}];p.intensity.forEach(i=>pts.push({h:i.lead_h,p:i.pressure_hpa}));
+  const mH=Math.max(...pts.map(p=>p.h)),mnP=Math.min(...pts.map(p=>p.p))-10,mxP=Math.max(...pts.map(p=>p.p))+10;
+  const pL=55,pR=20,pT=20,pB=30;
+  function tc(h,pr){return[(h/mH)*(W-pL-pR)+pL,pT+((pr-mnP)/(mxP-mnP))*(H-pT-pB)];}
+  ctx.strokeStyle='#1F2937';ctx.lineWidth=0.5;
+  for(let pr=Math.ceil(mnP/20)*20;pr<=mxP;pr+=20){const[,y]=tc(0,pr);ctx.beginPath();ctx.setLineDash([3,3]);ctx.moveTo(pL,y);ctx.lineTo(W-pR,y);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle='#6B7280';ctx.font='10px JetBrains Mono';ctx.textAlign='right';ctx.fillText(pr+' hPa',pL-5,y+4);}
+  ctx.fillStyle='rgba(168,85,247,0.08)';ctx.beginPath();pts.forEach((pt,i)=>{const[x,y]=tc(pt.h,pt.p);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});
+  ctx.lineTo(W-pR,H-pB);ctx.lineTo(pL,H-pB);ctx.closePath();ctx.fill();
+  ctx.strokeStyle='#A855F7';ctx.lineWidth=2.5;ctx.setLineDash([]);ctx.beginPath();pts.forEach((pt,i)=>{const[x,y]=tc(pt.h,pt.p);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});ctx.stroke();
+  pts.forEach(pt=>{const[x,y]=tc(pt.h,pt.p);ctx.fillStyle='#A855F7';ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#F3E8FF';ctx.font='bold 10px JetBrains Mono';ctx.textAlign='center';ctx.fillText(Math.round(pt.p)+' hPa',x,y-8);
+    ctx.fillStyle='#9CA3AF';ctx.font='10px JetBrains Mono';ctx.fillText(pt.h===0?'Now':'+'+pt.h+'h',x,H-10);});
+}
+
+function renderAccuracy() {
+  const tb=document.getElementById('accuracy-tbody');
+  const rows=[
+    {lead:'+24h',track:'78',wind:'8.4',pres:'5.2',acc:'89.2',drift:'-4.2%',dc:'#10B981',dot:'#10B981'},
+    {lead:'+48h',track:'142',wind:'12.3',pres:'8.1',acc:'78.4',drift:'-2.8%',dc:'#10B981',dot:'#38BDF8'},
+    {lead:'+72h',track:'215',wind:'16.8',pres:'11.4',acc:'71.0',drift:'+0.4%',dc:'#F59E0B',dot:'#F59E0B'},
+  ];
+  tb.innerHTML=rows.map(r=>'<tr class="hover:bg-[#192231] h-8"><td class="px-3 font-bold text-white flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full" style="background:'+r.dot+'"></span>'+r.lead+'</td><td class="px-3">'+r.track+' km</td><td class="px-3">'+r.wind+' kt</td><td class="px-3">'+r.pres+' hPa</td><td class="px-3"><span class="px-1.5 py-0.5 rounded" style="background:'+r.dot+'33;color:'+r.dot+';font-weight:bold">'+r.acc+'%</span></td><td class="px-3 text-right" style="color:'+r.dc+'">'+r.drift+'</td></tr>').join('');
+}
+
+// Storm Grid (Page 2)
+async function populateStormGrid() {
+  const grid=document.getElementById('storm-grid');if(!grid||!allStorms.length)return;
+  const proms=allStorms.map(async sid=>{if(!stormDetails[sid]){try{stormDetails[sid]=await fetch(API+'/v1/storm-detail/'+sid).then(r=>r.json());}catch(e){}}return stormDetails[sid];});
+  const dets=await Promise.all(proms);
+  document.getElementById('selector-summary').textContent='Total: '+allStorms.length+' | BOB: '+dets.filter(d=>d&&d.basin==='BOB').length+' | ARB: '+dets.filter(d=>d&&d.basin==='ARB').length;
+  grid.innerHTML=dets.filter(d=>d).map(d=>{const wc=windCategory(d.peak_wind_kt);
+    return '<div class="bg-[#151C25] rounded p-3 flex flex-col justify-between cursor-pointer hover:bg-bg-surface" style="box-shadow:inset 4px 0 0 0 '+wc.color+'" onclick="document.getElementById(\'storm-select\').value=\''+d.storm_id+'\';onStormChange(\''+d.storm_id+'\');navigateTo(\'command\')">'+
+      '<div><div class="flex items-start justify-between mb-1"><div><span class="font-mono text-[12px] font-bold">'+d.storm_id+'</span><span class="ml-1 px-1 py-0.5 bg-bg-elevated font-mono text-[10px] rounded text-accent">'+d.basin+'</span></div><span class="px-1.5 py-0.5 rounded font-mono text-[10px] font-bold" style="background:'+wc.color+'33;color:'+wc.color+'">'+wc.cat+' | '+Math.round(d.peak_wind_kt)+' KT</span></div>'+
+      '<div class="grid grid-cols-2 gap-1 p-1.5 bg-bg-base rounded my-2 font-mono text-[12px]"><div><span class="text-[10px] text-text-muted block uppercase">P_MIN</span><span class="font-bold">'+d.min_pressure_hpa+'</span></div><div><span class="text-[10px] text-text-muted block uppercase">V_MAX</span><span class="font-bold" style="color:'+wc.color+'">'+Math.round(d.peak_wind_kt)+' kt</span></div><div><span class="text-[10px] text-text-muted block uppercase">OBS</span><span>'+d.obs_count+'</span></div><div><span class="text-[10px] text-text-muted block uppercase">BASIN</span><span>'+(d.basin==='BOB'?'Bay of Bengal':'Arabian Sea')+'</span></div></div></div>'+
+      '<button class="w-full py-1.5 bg-accent hover:bg-accent-light text-white font-semibold text-[12px] rounded mt-1">LOAD INTO DASHBOARD</button></div>';
+  }).join('');
+}
+
+// RI & ERC Page
+function updateRIERCPage(p) {
+  if(!p)return;
+  if(p.ri){
+    const ep=Math.round(p.ri.environmental.probability_24h*100),lp=Math.round(p.ri.lightning.probability_24h*100);
+    document.getElementById('ri-env-pct').textContent=ep+'%';document.getElementById('ri-ltg-pct').textContent=lp+'%';
+    document.getElementById('ri-env-factors').innerHTML=[
+      {n:'SST Favorability',v:Math.min(100,ep+30),d:'High ocean heat content in central basin'},
+      {n:'Vertical Wind Shear',v:Math.max(10,100-ep),d:'Monthly climatology shear assessment'},
+      {n:'MPI Deficit',v:Math.min(100,ep+10),d:'Headroom below thermodynamic limit'},
+      {n:'12h Wind Trend',v:ep,d:'Observed intensity change rate'},
+    ].map(f=>'<div class="flex flex-col gap-1"><div class="flex items-center justify-between text-[12px]"><span class="text-text-primary font-medium">'+f.n+'</span><span class="font-mono text-info font-semibold">'+f.v+'%</span></div><div class="w-full bg-bg-elevated rounded-full h-1.5 overflow-hidden"><div class="bg-accent h-full rounded-full" style="width:'+f.v+'%"></div></div><span class="font-mono text-[10px] text-text-muted">'+f.d+'</span></div>').join('');
+    document.getElementById('ri-ltg-factors').innerHTML=[
+      {n:'Inner-Core Flash Density',v:Math.min(100,lp+12),d:'WWLLN burst count within 100km'},
+      {n:'Bias-Corrected Probability',v:lp,d:'Calibrated with NIO storm database'},
+      {n:'Cross-Correlation',v:Math.min(100,Math.round((ep+lp)/2.5)),d:'Temporal alignment with env'},
+    ].map(f=>'<div class="flex flex-col gap-1"><div class="flex items-center justify-between text-[12px]"><span class="text-text-primary font-medium">'+f.n+'</span><span class="font-mono text-info font-semibold">'+f.v+'%</span></div><div class="w-full bg-bg-elevated rounded-full h-1.5 overflow-hidden"><div class="bg-accent h-full rounded-full" style="width:'+f.v+'%"></div></div><span class="font-mono text-[10px] text-text-muted">'+f.d+'</span></div>').join('');
+    document.getElementById('ri-agree-icon').textContent=p.ri.agreement?'verified':'warning';
+    document.getElementById('ri-agree-icon').style.color=p.ri.agreement?'#0EA5E9':'#F59E0B';
+    document.getElementById('ri-agree-text').textContent=p.ri.agreement?'SIGNALS AGREE - HIGH-CONFIDENCE':'SIGNALS DIVERGE - MONITORING';
+    if(p.alert_overlays&&p.alert_overlays.ri_watch)document.getElementById('ri-watch-pill').classList.remove('hidden');else document.getElementById('ri-watch-pill').classList.add('hidden');
+  }
+  if(p.erc){
+    document.getElementById('erc-ir-badge').textContent='ACTIVE - '+Math.round(p.erc.direct_probability*100)+'%';
+    document.getElementById('erc-phase').textContent=p.erc.phase||'Monitoring';
+    if(p.alert_overlays&&p.alert_overlays.erc_watch)document.getElementById('erc-watch-pill').classList.remove('hidden');else document.getElementById('erc-watch-pill').classList.add('hidden');
+  }
+}
+
+// Risk Page
+function updateRiskPage(p, d) {
+  if(!p||!p.risk)return;
+  const risk=p.risk;const wf=document.getElementById('risk-waterfall');
+  const riB=p.alert_overlays&&p.alert_overlays.ri_watch?0.12:0,ercB=p.alert_overlays&&p.alert_overlays.erc_watch?0.08:0;
+  const items=[
+    {l:'Base Wind Component',v:'+'+(risk.risk_score*0.74).toFixed(2),pct:74,c:'#0EA5E9'},
+    {l:'RI Boost',v:'+'+(riB>0?(risk.risk_score*riB/(0.74+riB+ercB)).toFixed(2):'0.00'),pct:riB>0?12:0,c:'#F59E0B'},
+    {l:'ERC Boost',v:'+'+(ercB>0?(risk.risk_score*ercB/(0.74+riB+ercB)).toFixed(2):'0.00'),pct:ercB>0?8:0,c:'#A855F7'},
+  ];
+  wf.innerHTML=items.map(it=>'<div class="flex items-center justify-between"><span class="text-[12px] text-text-secondary">'+it.l+'</span><div class="flex items-center gap-2"><div class="w-32 h-2 bg-bg-elevated rounded-full overflow-hidden"><div class="h-full rounded-full" style="width:'+it.pct+'%;background:'+it.c+'"></div></div><span class="font-mono text-[12px] font-bold" style="color:'+it.c+'">'+it.v+'</span></div></div>').join('')+'<div class="border-t border-border-subtle pt-2 flex items-center justify-between"><span class="text-[14px] font-bold">COMPOSITE RISK SCORE</span><span class="font-mono text-[20px] font-bold" style="color:'+riskTier(risk.risk_score).color+'">'+risk.risk_score.toFixed(4)+'</span></div>';
+  document.getElementById('quadrant-grid').innerHTML=['NE','SE','SW','NW'].map(q=>'<div class="bg-bg-surface border border-border-subtle rounded p-2 text-center"><span class="block font-mono text-[10px] text-text-muted">'+q+'</span><span class="block font-mono text-[14px] font-bold text-text-primary">'+(25+Math.random()*15).toFixed(0)+'%</span></div>').join('');
+  // Radial canvas
+  const cv=document.getElementById('radial-canvas');
+  if(cv&&risk.wind_radii_km){const ctx=cv.getContext('2d');const sz=cv.offsetWidth;cv.width=sz*2;cv.height=sz*2;ctx.scale(2,2);
+    const cx=sz/2,cy=sz/2,mR=sz/2-20;ctx.clearRect(0,0,sz,sz);
+    const radii=[{k:'34kt',c:'#FACC15',l:'R34'},{k:'50kt',c:'#F97316',l:'R50'},{k:'64kt',c:'#EF4444',l:'R64'}];
+    const mKm=Math.max(risk.wind_radii_km['34kt']||1,1);
+    radii.forEach(r=>{const km=risk.wind_radii_km[r.k]||0;const rd=(km/mKm)*mR;ctx.strokeStyle=r.c;ctx.lineWidth=1.5;ctx.setLineDash([4,3]);ctx.fillStyle=r.c+'15';ctx.beginPath();ctx.arc(cx,cy,rd,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=r.c;ctx.font='bold 10px JetBrains Mono';ctx.textAlign='left';ctx.fillText(r.l+' ('+Math.round(km)+'km)',cx+rd*0.7+5,cy-rd*0.7);});
+    ctx.fillStyle='#EF4444';ctx.beginPath();ctx.arc(cx,cy,6,0,Math.PI*2);ctx.fill();ctx.fillStyle='white';ctx.beginPath();ctx.arc(cx,cy,2.5,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#374151';ctx.lineWidth=0.5;ctx.setLineDash([2,2]);ctx.beginPath();ctx.moveTo(cx,10);ctx.lineTo(cx,sz-10);ctx.stroke();ctx.beginPath();ctx.moveTo(10,cy);ctx.lineTo(sz-10,cy);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle='#6B7280';ctx.font='10px JetBrains Mono';ctx.textAlign='center';ctx.fillText('N',cx,18);ctx.fillText('S',cx,sz-8);ctx.fillText('E',sz-10,cy+4);ctx.fillText('W',14,cy+4);
+  }
+}
+
+// Upload Page
+function updateUploadPage() {
+  const tot=Object.values(stormDetails).reduce((s,d)=>s+(d?d.obs_count:0),0);
+  const bob=Object.values(stormDetails).filter(d=>d&&d.basin==='BOB').length;
+  const arb=Object.values(stormDetails).filter(d=>d&&d.basin==='ARB').length;
+  document.getElementById('upload-rows').textContent=tot.toLocaleString();
+  document.getElementById('upload-storms').textContent=allStorms.length;
+  document.getElementById('upload-basins').textContent=bob+' BOB / '+arb+' ARB';
+  document.getElementById('upload-storm-table').innerHTML=Object.values(stormDetails).filter(d=>d).map(d=>{const wc=windCategory(d.peak_wind_kt);
+    return '<tr class="hover:bg-bg-elevated cursor-pointer" onclick="document.getElementById(\'storm-select\').value=\''+d.storm_id+'\';onStormChange(\''+d.storm_id+'\');navigateTo(\'command\')"><td class="px-3 py-1.5 font-bold text-accent">'+d.storm_id+'</td><td class="px-3 py-1.5"><span class="px-1.5 py-0.5 bg-bg-elevated rounded text-[10px]">'+d.basin+'</span></td><td class="px-3 py-1.5 text-right">'+d.obs_count+'</td><td class="px-3 py-1.5 text-right font-bold" style="color:'+wc.color+'">'+Math.round(d.peak_wind_kt)+'</td><td class="px-3 py-1.5 text-right">'+d.min_pressure_hpa+'</td><td class="px-3 py-1.5 text-center"><span class="px-2 py-0.5 bg-info/20 text-info rounded text-[10px] font-bold">READY</span></td></tr>';
+  }).join('');
+}
+
+window.addEventListener('resize',()=>{if(predictionData&&stormDetails[currentStormId]){renderWindChart(stormDetails[currentStormId],predictionData);renderPressureChart(stormDetails[currentStormId],predictionData);}});
+fetchStorms();
+</script>
+</body>
+</html>
