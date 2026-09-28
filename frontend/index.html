@@ -459,21 +459,24 @@ tailwind.config = {
   <div class="p-3 space-y-3">
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-3">
       <div id="drop-zone"
-           class="lg:col-span-8 bg-bg-surface rounded-md p-4 flex flex-col items-center justify-center min-h-[220px] border-2 border-dashed border-border-active hover:border-accent cursor-pointer transition-colors"
-           onclick="document.getElementById('file-input').click()"
-           ondragover="event.preventDefault(); document.getElementById('drop-zone').classList.add('border-accent','bg-accent/5');"
+           class="lg:col-span-8 bg-bg-surface rounded-md border-2 border-dashed border-border-active hover:border-accent transition-colors"
+           ondragover="event.preventDefault(); event.stopPropagation(); document.getElementById('drop-zone').classList.add('border-accent','bg-accent/5');"
            ondragleave="document.getElementById('drop-zone').classList.remove('border-accent','bg-accent/5');"
-           ondrop="event.preventDefault(); document.getElementById('drop-zone').classList.remove('border-accent','bg-accent/5'); handleFileUpload(event.dataTransfer.files[0]);">
-        <span class="material-symbols-outlined text-accent text-[48px] mb-2" id="upload-icon">cloud_upload</span>
-        <span class="text-[15px] font-semibold mb-1" id="upload-label">Drag and drop IBTrACS CSV or click to browse</span>
-        <span class="text-[12px] text-text-secondary" id="upload-sublabel">Streaming parser for cyclone coordinates, wind series, and pressure data.</span>
-        <div id="upload-progress" class="hidden mt-3 w-full max-w-xs">
-          <div class="h-1.5 bg-bg-elevated rounded-full overflow-hidden">
-            <div id="upload-progress-bar" class="h-full bg-accent rounded-full transition-all duration-500" style="width:0%"></div>
+           ondrop="event.preventDefault(); event.stopPropagation(); document.getElementById('drop-zone').classList.remove('border-accent','bg-accent/5'); handleFileUpload(event.dataTransfer.files[0]);">
+        <!-- label makes the entire zone clickable without JS .click() hacks -->
+        <label for="file-input" class="flex flex-col items-center justify-center min-h-[220px] w-full cursor-pointer p-4">
+          <span class="material-symbols-outlined text-accent text-[48px] mb-2" id="upload-icon">cloud_upload</span>
+          <span class="text-[15px] font-semibold mb-1" id="upload-label">Drag and drop IBTrACS CSV or click to browse</span>
+          <span class="text-[12px] text-text-secondary" id="upload-sublabel">Streaming parser for cyclone coordinates, wind series, and pressure data.</span>
+          <div id="upload-progress" class="hidden mt-3 w-full max-w-xs">
+            <div class="h-1.5 bg-bg-elevated rounded-full overflow-hidden">
+              <div id="upload-progress-bar" class="h-full bg-accent rounded-full transition-all duration-500" style="width:0%"></div>
+            </div>
+            <span class="font-mono text-[11px] text-accent mt-1 block text-center" id="upload-progress-label">Uploading...</span>
           </div>
-          <span class="font-mono text-[11px] text-accent mt-1 block text-center" id="upload-progress-label">Uploading...</span>
-        </div>
-        <input accept=".csv,.gz" class="hidden" id="file-input" type="file" onchange="handleFileUpload(this.files[0])"/>
+        </label>
+        <input accept=".csv,.gz" class="hidden" id="file-input" type="file"
+               onchange="handleFileUpload(this.files[0])"/>
       </div>
       <div class="lg:col-span-4 bg-bg-surface rounded-md p-3">
         <div class="flex items-center gap-1.5 mb-2"><span class="material-symbols-outlined text-accent text-[18px]">verified_user</span><span class="font-mono text-[10px] text-text-primary uppercase tracking-wider font-semibold">Parser Constraints</span></div>
