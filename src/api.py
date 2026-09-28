@@ -350,23 +350,35 @@ def predict(request: PredictRequest):
     # Step 4: compute_risk with RI/ERC awareness (CN-014)
     risk_result = None
     try:
-        if calibrated.get("intensity"):
-            strongest = max(calibrated["intensity"], key=lambda p: p["wind_kt"])
+        # Include the current state in our search for the strongest wind
+        # because a currently intense storm that is forecasted to decay 
+        # should still reflect its current high risk!
+        current_state = {"lead_h": 0, "wind_kt": current_wind}
+        all_intensities = [current_state] + (calibrated.get("intensity") or [])
+        strongest = max(all_intensities, key=lambda p: p["wind_kt"])
+        
+        # Match track by lead_h. If lead_h is 0, use current lat/lon
+        if strongest["lead_h"] == 0:
+            matching_lat = lat
+            matching_lon = lon
+        else:
             matching_track = next(
                 (t for t in calibrated["track"] if t["lead_h"] == strongest["lead_h"]),
                 calibrated["track"][0] if calibrated["track"] else None,
             )
-            if matching_track:
-                rmw_src = erc_result.get("reference_rmw_source", "inner") if erc_result else "inner"
-                risk_result = _risk_fn(
-                    strongest["wind_kt"],
-                    matching_track["lat"],
-                    matching_track["lon"],
-                    ri_flag=alert_flags["ri_watch"],
-                    erc_flag=alert_flags["erc_watch"],
-                    reference_rmw_source=rmw_src,
-                )
-    except Exception:
+            matching_lat = matching_track["lat"] if matching_track else lat
+            matching_lon = matching_track["lon"] if matching_track else lon
+
+        rmw_src = erc_result.get("reference_rmw_source", "inner") if erc_result else "inner"
+        risk_result = _risk_fn(
+            strongest["wind_kt"],
+            matching_lat,
+            matching_lon,
+            ri_flag=alert_flags["ri_watch"],
+            erc_flag=alert_flags["erc_watch"],
+            reference_rmw_source=rmw_src,
+        )
+    except Exception as e:
         risk_result = None
 
     # Assemble response
