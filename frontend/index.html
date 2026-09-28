@@ -531,6 +531,17 @@ function navigateTo(page) {
   document.getElementById('page-' + page).classList.add('active');
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.querySelector('.nav-item[data-page="' + page + '"]').classList.add('active');
+  
+  // Re-render canvases if data exists because offsetWidth is 0 when hidden
+  if (predictionData && stormDetails[currentStormId]) {
+    if (page === 'risk') {
+      updateRiskPage(predictionData, stormDetails[currentStormId]);
+    } else if (page === 'command') {
+      renderWindChart(stormDetails[currentStormId], predictionData);
+      renderPressureChart(stormDetails[currentStormId], predictionData);
+      if (leafletMap) setTimeout(() => leafletMap.invalidateSize(), 50);
+    }
+  }
 }
 
 // API
