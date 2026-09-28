@@ -458,11 +458,22 @@ tailwind.config = {
   <div class="bg-[#151C25] px-3 py-2 flex items-center gap-1 font-mono text-[10px] text-accent"><span class="material-symbols-outlined text-[14px]">terminal</span><span class="uppercase tracking-widest font-semibold">TERMINAL 05 // DATA INGESTION // IBTrACS COMPLIANCE</span></div>
   <div class="p-3 space-y-3">
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-3">
-      <div class="lg:col-span-8 bg-bg-surface rounded-md p-4 flex flex-col items-center justify-center min-h-[220px] border-2 border-dashed border-border-active hover:border-accent cursor-pointer" onclick="document.getElementById('file-input').click()">
-        <span class="material-symbols-outlined text-accent text-[48px] mb-2">cloud_upload</span>
-        <span class="text-[15px] font-semibold mb-1">Drag and drop IBTrACS CSV or click to browse</span>
-        <span class="text-[12px] text-text-secondary">Streaming parser for cyclone coordinates, wind series, and pressure data.</span>
-        <input accept=".csv,.gz" class="hidden" id="file-input" type="file"/>
+      <div id="drop-zone"
+           class="lg:col-span-8 bg-bg-surface rounded-md p-4 flex flex-col items-center justify-center min-h-[220px] border-2 border-dashed border-border-active hover:border-accent cursor-pointer transition-colors"
+           onclick="document.getElementById('file-input').click()"
+           ondragover="event.preventDefault(); document.getElementById('drop-zone').classList.add('border-accent','bg-accent/5');"
+           ondragleave="document.getElementById('drop-zone').classList.remove('border-accent','bg-accent/5');"
+           ondrop="event.preventDefault(); document.getElementById('drop-zone').classList.remove('border-accent','bg-accent/5'); handleFileUpload(event.dataTransfer.files[0]);">
+        <span class="material-symbols-outlined text-accent text-[48px] mb-2" id="upload-icon">cloud_upload</span>
+        <span class="text-[15px] font-semibold mb-1" id="upload-label">Drag and drop IBTrACS CSV or click to browse</span>
+        <span class="text-[12px] text-text-secondary" id="upload-sublabel">Streaming parser for cyclone coordinates, wind series, and pressure data.</span>
+        <div id="upload-progress" class="hidden mt-3 w-full max-w-xs">
+          <div class="h-1.5 bg-bg-elevated rounded-full overflow-hidden">
+            <div id="upload-progress-bar" class="h-full bg-accent rounded-full transition-all duration-500" style="width:0%"></div>
+          </div>
+          <span class="font-mono text-[11px] text-accent mt-1 block text-center" id="upload-progress-label">Uploading...</span>
+        </div>
+        <input accept=".csv,.gz" class="hidden" id="file-input" type="file" onchange="handleFileUpload(this.files[0])"/>
       </div>
       <div class="lg:col-span-4 bg-bg-surface rounded-md p-3">
         <div class="flex items-center gap-1.5 mb-2"><span class="material-symbols-outlined text-accent text-[18px]">verified_user</span><span class="font-mono text-[10px] text-text-primary uppercase tracking-wider font-semibold">Parser Constraints</span></div>
@@ -989,17 +1000,113 @@ function updateRiskPage(p, d) {
   }
 }
 
-// Upload Page
+// Upload Page — populate stats from already-loaded storms
 function updateUploadPage() {
-  const tot=Object.values(stormDetails).reduce((s,d)=>s+(d?d.obs_count:0),0);
-  const bob=Object.values(stormDetails).filter(d=>d&&d.basin==='BOB').length;
-  const arb=Object.values(stormDetails).filter(d=>d&&d.basin==='ARB').length;
-  document.getElementById('upload-rows').textContent=tot.toLocaleString();
-  document.getElementById('upload-storms').textContent=allStorms.length;
-  document.getElementById('upload-basins').textContent=bob+' BOB / '+arb+' ARB';
-  document.getElementById('upload-storm-table').innerHTML=Object.values(stormDetails).filter(d=>d).map(d=>{const wc=windCategory(d.peak_wind_kt);
-    return '<tr class="hover:bg-bg-elevated cursor-pointer" onclick="document.getElementById(\'storm-select\').value=\''+d.storm_id+'\';onStormChange(\''+d.storm_id+'\');navigateTo(\'command\')"><td class="px-3 py-1.5 font-bold text-accent">'+d.storm_id+'</td><td class="px-3 py-1.5"><span class="px-1.5 py-0.5 bg-bg-elevated rounded text-[10px]">'+d.basin+'</span></td><td class="px-3 py-1.5 text-right">'+d.obs_count+'</td><td class="px-3 py-1.5 text-right font-bold" style="color:'+wc.color+'">'+Math.round(d.peak_wind_kt)+'</td><td class="px-3 py-1.5 text-right">'+d.min_pressure_hpa+'</td><td class="px-3 py-1.5 text-center"><span class="px-2 py-0.5 bg-info/20 text-info rounded text-[10px] font-bold">READY</span></td></tr>';
+  const tot = Object.values(stormDetails).reduce((s, d) => s + (d ? d.obs_count : 0), 0);
+  const bob = Object.values(stormDetails).filter(d => d && d.basin === 'BOB').length;
+  const arb = Object.values(stormDetails).filter(d => d && d.basin === 'ARB').length;
+  document.getElementById('upload-rows').textContent = tot.toLocaleString();
+  document.getElementById('upload-storms').textContent = allStorms.length;
+  document.getElementById('upload-basins').textContent = bob + ' BOB / ' + arb + ' ARB';
+  document.getElementById('upload-storm-table').innerHTML = Object.values(stormDetails).filter(d => d).map(d => {
+    const wc = windCategory(d.peak_wind_kt);
+    return '<tr class="hover:bg-bg-elevated cursor-pointer" onclick="document.getElementById(\'storm-select\').value=\'' + d.storm_id + '\';onStormChange(\'' + d.storm_id + '\');navigateTo(\'command\')"><td class="px-3 py-1.5 font-bold text-accent">' + d.storm_id + '</td><td class="px-3 py-1.5"><span class="px-1.5 py-0.5 bg-bg-elevated rounded text-[10px]">' + d.basin + '</span></td><td class="px-3 py-1.5 text-right">' + d.obs_count + '</td><td class="px-3 py-1.5 text-right font-bold" style="color:' + wc.color + '">' + Math.round(d.peak_wind_kt) + '</td><td class="px-3 py-1.5 text-right">' + d.min_pressure_hpa + '</td><td class="px-3 py-1.5 text-center"><span class="px-2 py-0.5 bg-info/20 text-info rounded text-[10px] font-bold">READY</span></td></tr>';
   }).join('');
+}
+
+// Handle file upload (drag-drop or file picker)
+async function handleFileUpload(file) {
+  if (!file) return;
+
+  const icon = document.getElementById('upload-icon');
+  const label = document.getElementById('upload-label');
+  const sublabel = document.getElementById('upload-sublabel');
+  const progress = document.getElementById('upload-progress');
+  const progressBar = document.getElementById('upload-progress-bar');
+  const progressLabel = document.getElementById('upload-progress-label');
+
+  // UI: uploading state
+  icon.textContent = 'sync';
+  icon.classList.add('animate-spin');
+  label.textContent = 'Uploading ' + file.name + '...';
+  sublabel.textContent = (file.size / 1024 / 1024).toFixed(2) + ' MB';
+  progress.classList.remove('hidden');
+  progressBar.style.width = '30%';
+  progressLabel.textContent = 'Sending to parser...';
+
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    progressBar.style.width = '60%';
+    progressLabel.textContent = 'Parsing CSV...';
+
+    const res = await fetch(API + '/v1/upload', {
+      method: 'POST',
+      body: formData,
+    });
+
+    progressBar.style.width = '90%';
+    progressLabel.textContent = 'Validating schema...';
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || 'Upload failed');
+    }
+
+    const data = await res.json();
+    progressBar.style.width = '100%';
+    progressLabel.textContent = 'Done!';
+
+    // UI: success state
+    icon.textContent = 'check_circle';
+    icon.classList.remove('animate-spin');
+    icon.style.color = '#10B981';
+    label.textContent = data.filename + ' ingested successfully';
+    sublabel.textContent = data.total_storms + ' storms · ' + data.total_rows.toLocaleString() + ' rows · Schema: ' + data.schema;
+
+    // Update stats
+    document.getElementById('upload-rows').textContent = data.total_rows.toLocaleString();
+    document.getElementById('upload-storms').textContent = data.total_storms;
+
+    // Render ingested storm table
+    document.getElementById('upload-storm-table').innerHTML = data.storms.map(s => {
+      const wc = windCategory(s.peak_wind_kt);
+      return '<tr class="hover:bg-bg-elevated"><td class="px-3 py-1.5 font-bold text-accent">' + s.storm_id + '</td>' +
+        '<td class="px-3 py-1.5"><span class="px-1.5 py-0.5 bg-bg-elevated rounded text-[10px]">' + s.basin + '</span></td>' +
+        '<td class="px-3 py-1.5 text-right">' + s.obs_count + '</td>' +
+        '<td class="px-3 py-1.5 text-right font-bold" style="color:' + wc.color + '">' + Math.round(s.peak_wind_kt) + '</td>' +
+        '<td class="px-3 py-1.5 text-right">' + (s.min_pressure_hpa || '--') + '</td>' +
+        '<td class="px-3 py-1.5 text-center"><span class="px-2 py-0.5 bg-success/20 text-success rounded text-[10px] font-bold">INGESTED</span></td></tr>';
+    }).join('');
+
+    // Reset file input so same file can be uploaded again
+    document.getElementById('file-input').value = '';
+
+    // Hide progress bar after 2s
+    setTimeout(() => { progress.classList.add('hidden'); progressBar.style.width = '0%'; }, 2000);
+
+  } catch (err) {
+    // UI: error state
+    icon.textContent = 'error';
+    icon.classList.remove('animate-spin');
+    icon.style.color = '#EF4444';
+    label.textContent = 'Upload failed';
+    sublabel.textContent = err.message;
+    progressBar.style.width = '100%';
+    progressBar.style.background = '#EF4444';
+    progressLabel.textContent = 'Error: ' + err.message;
+    document.getElementById('file-input').value = '';
+    setTimeout(() => {
+      progress.classList.add('hidden');
+      progressBar.style.width = '0%';
+      progressBar.style.background = '';
+      icon.textContent = 'cloud_upload';
+      icon.style.color = '';
+      label.textContent = 'Drag and drop IBTrACS CSV or click to browse';
+      sublabel.textContent = 'Streaming parser for cyclone coordinates, wind series, and pressure data.';
+    }, 4000);
+  }
 }
 
 window.addEventListener('resize',()=>{if(predictionData&&stormDetails[currentStormId]){renderWindChart(stormDetails[currentStormId],predictionData);renderPressureChart(stormDetails[currentStormId],predictionData);}});

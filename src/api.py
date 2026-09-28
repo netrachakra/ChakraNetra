@@ -15,7 +15,7 @@ import os
 import traceback
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -433,6 +433,118 @@ def storm_detail(storm_id: str):
             }
             for _, r in storm.iterrows()
         ],
+    }
+
+
+
+# --------------------------------------------------------------------------- #
+# POST /v1/upload — IBTrACS CSV ingestion
+# --------------------------------------------------------------------------- #
+
+@app.post("/v1/upload")
+async def upload_ibtracs(file: UploadFile = File(...)):
+    """
+    Accept an IBTrACS CSV upload (v04r01 NIO subset or our processed storms.csv).
+    Parses the file, validates columns, and returns a summary of detected storms.
+    Supports both raw IBTrACS format and our processed storms.csv format.
+    """
+    import io
+    import pandas as pd
+
+    # Size guard (200 MB)
+    MAX_BYTES = 200 * 1024 * 1024
+    content = await file.read()
+    if len(content) > MAX_BYTES:
+        raise HTTPException(status_code=413, detail="File too large. Max 200 MB.")
+
+    filename = file.filename or ""
+
+    try:
+        # Handle gzip
+        if filename.endswith(".gz"):
+            import gzip
+            content = gzip.decompress(content)
+
+        text = content.decode("utf-8", errors="replace")
+        df = pd.read_csv(io.StringIO(text), low_memory=False)
+
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Could not parse CSV: {e}")
+
+    df.columns = [c.strip().upper() for c in df.columns]
+
+    # --- Detect format: IBTrACS raw vs processed storms.csv ---
+    ibtracs_cols = {"SID", "BASIN", "ISO_TIME", "LAT", "LON", "WMO_WIND", "WMO_PRES"}
+    processed_cols = {"STORM_ID", "TIMESTAMP", "LAT", "LON", "WIND_KT", "PRESSURE_HPA", "BASIN"}
+
+    if ibtracs_cols.issubset(set(df.columns)):
+        # Raw IBTrACS format
+        df = df[df["BASIN"].isin(["BB", "AS", "NI", "BOB", "ARB"])].copy()
+        df = df.rename(columns={
+            "SID": "storm_id", "BASIN": "basin",
+            "ISO_TIME": "timestamp", "LAT": "lat", "LON": "lon",
+            "WMO_WIND": "wind_kt", "WMO_PRES": "pressure_hpa",
+        })
+        # Skip header rows IBTrACS embeds (row 0 is units)
+        df = df[df["storm_id"].notna() & ~df["storm_id"].str.startswith("SID")]
+        df["wind_kt"] = pd.to_numeric(df["wind_kt"], errors="coerce")
+        df["pressure_hpa"] = pd.to_numeric(df["pressure_hpa"], errors="coerce")
+        df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
+        df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
+        df = df.dropna(subset=["lat", "lon"])
+        schema = "IBTrACS v04r01"
+
+    elif processed_cols.issubset(set(df.columns)):
+        # Our processed storms.csv format
+        df.columns = [c.lower() for c in df.columns]
+        df["wind_kt"] = pd.to_numeric(df["wind_kt"], errors="coerce")
+        df["pressure_hpa"] = pd.to_numeric(df["pressure_hpa"], errors="coerce")
+        df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
+        df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
+        df = df.dropna(subset=["lat", "lon"])
+        schema = "ChakraNetra processed"
+
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unrecognised schema. Expected IBTrACS columns "
+                   f"(SID, BASIN, ISO_TIME, LAT, LON, WMO_WIND, WMO_PRES) "
+                   f"or processed columns (storm_id, basin, timestamp, lat, lon, wind_kt, pressure_hpa). "
+                   f"Found: {list(df.columns)[:10]}"
+        )
+
+    if len(df) == 0:
+        raise HTTPException(status_code=422, detail="No valid rows found after parsing.")
+
+    # Build per-storm summary
+    storms_out = []
+    for sid, grp in df.groupby("storm_id"):
+        grp = grp.dropna(subset=["wind_kt"])
+        if len(grp) == 0:
+            continue
+        peak_idx = grp["wind_kt"].idxmax()
+        peak = grp.loc[peak_idx]
+        basin_val = str(grp["basin"].iloc[0])
+        # Normalise basin codes
+        if basin_val in ("BB", "NI"):
+            basin_val = "BOB"
+        elif basin_val == "AS":
+            basin_val = "ARB"
+        storms_out.append({
+            "storm_id": str(sid),
+            "basin": basin_val,
+            "obs_count": len(grp),
+            "peak_wind_kt": round(float(peak["wind_kt"]), 1),
+            "min_pressure_hpa": round(float(grp["pressure_hpa"].dropna().min()), 1) if grp["pressure_hpa"].notna().any() else None,
+            "status": "INGESTED",
+        })
+
+    return {
+        "filename": filename,
+        "schema": schema,
+        "total_rows": len(df),
+        "total_storms": len(storms_out),
+        "storms": storms_out,
     }
 
 
