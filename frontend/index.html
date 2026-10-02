@@ -1042,22 +1042,36 @@ async function handleFileUpload(file) {
     formData.append('file', file);
 
     progressBar.style.width = '60%';
-    progressLabel.textContent = 'Parsing CSV...';
+    progressLabel.textContent = 'Parsing CSV (large files may take 10-20s)...';
+
+    // 120-second timeout for large files on free-tier servers
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
 
     const res = await fetch(API + '/v1/upload', {
       method: 'POST',
       body: formData,
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
 
     progressBar.style.width = '90%';
     progressLabel.textContent = 'Validating schema...';
 
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Upload failed');
+    // Safely read response text first, then parse JSON
+    const responseText = await res.text();
+    if (!responseText || responseText.trim().length === 0) {
+      throw new Error('Server returned empty response. The file may be too large for the free server tier. Try uploading data/processed/storms.csv instead.');
     }
 
-    const data = await res.json();
+    let data;
+    try { data = JSON.parse(responseText); } catch(e) {
+      throw new Error('Server response was incomplete. Try a smaller file or use data/processed/storms.csv.');
+    }
+
+    if (!res.ok) {
+      throw new Error(data.detail || 'Upload failed with status ' + res.status);
+    }
     progressBar.style.width = '100%';
     progressLabel.textContent = 'Done!';
 
@@ -1091,14 +1105,18 @@ async function handleFileUpload(file) {
 
   } catch (err) {
     // UI: error state
+    let msg = err.message;
+    if (err.name === 'AbortError') {
+      msg = 'Request timed out. The server took too long. Try uploading data/processed/storms.csv instead of the raw IBTrACS file.';
+    }
     icon.textContent = 'error';
     icon.classList.remove('animate-spin');
     icon.style.color = '#EF4444';
     label.textContent = 'Upload failed';
-    sublabel.textContent = err.message;
+    sublabel.textContent = msg;
     progressBar.style.width = '100%';
     progressBar.style.background = '#EF4444';
-    progressLabel.textContent = 'Error: ' + err.message;
+    progressLabel.textContent = 'Error';
     document.getElementById('file-input').value = '';
     setTimeout(() => {
       progress.classList.add('hidden');
@@ -1108,7 +1126,7 @@ async function handleFileUpload(file) {
       icon.style.color = '';
       label.textContent = 'Drag and drop IBTrACS CSV or click to browse';
       sublabel.textContent = 'Streaming parser for cyclone coordinates, wind series, and pressure data.';
-    }, 4000);
+    }, 6000);
   }
 }
 
