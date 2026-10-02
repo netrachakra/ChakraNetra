@@ -1028,66 +1028,133 @@ async function handleFileUpload(file) {
   const progressBar = document.getElementById('upload-progress-bar');
   const progressLabel = document.getElementById('upload-progress-label');
 
-  // UI: uploading state
+  // UI: loading state
   icon.textContent = 'sync';
   icon.classList.add('animate-spin');
-  label.textContent = 'Uploading ' + file.name + '...';
+  label.textContent = 'Reading ' + file.name + '...';
   sublabel.textContent = (file.size / 1024 / 1024).toFixed(2) + ' MB';
   progress.classList.remove('hidden');
-  progressBar.style.width = '30%';
-  progressLabel.textContent = 'Sending to parser...';
+  progressBar.style.width = '20%';
+  progressLabel.textContent = 'Reading file...';
 
   try {
-    const formData = new FormData();
-    formData.append('file', file);
+    // Read file client-side — no server call needed
+    const text = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('Could not read file'));
+      reader.readAsText(file);
+    });
+
+    progressBar.style.width = '40%';
+    progressLabel.textContent = 'Detecting schema...';
+
+    const lines = text.split('\n').filter(l => l.trim().length > 0);
+    if (lines.length < 2) throw new Error('File is empty or has no data rows.');
+
+    const headerRaw = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+    const headerUpper = headerRaw.map(h => h.toUpperCase());
+
+    // Detect format
+    const isIBTrACS = ['SID','BASIN','ISO_TIME','LAT','LON','WMO_WIND','WMO_PRES'].every(c => headerUpper.includes(c));
+    const isProcessed = ['STORM_ID','TIMESTAMP','LAT','LON','WIND_KT','PRESSURE_HPA','BASIN'].every(c => headerUpper.includes(c));
+
+    if (!isIBTrACS && !isProcessed) {
+      throw new Error('Unrecognised CSV schema. Expected IBTrACS (SID, BASIN, ISO_TIME, LAT, LON, WMO_WIND, WMO_PRES) or processed (storm_id, timestamp, lat, lon, wind_kt, pressure_hpa, basin). Found: ' + headerRaw.slice(0, 8).join(', '));
+    }
 
     progressBar.style.width = '60%';
-    progressLabel.textContent = 'Parsing CSV (large files may take 10-20s)...';
+    progressLabel.textContent = 'Parsing rows...';
 
-    // 120-second timeout for large files on free-tier servers
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 120000);
-
-    const res = await fetch(API + '/v1/upload', {
-      method: 'POST',
-      body: formData,
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-
-    progressBar.style.width = '90%';
-    progressLabel.textContent = 'Validating schema...';
-
-    // Safely read response text first, then parse JSON
-    const responseText = await res.text();
-    if (!responseText || responseText.trim().length === 0) {
-      throw new Error('Server returned empty response. The file may be too large for the free server tier. Try uploading data/processed/storms.csv instead.');
+    // Get column indices
+    let idxSID, idxBasin, idxLat, idxLon, idxWind, idxPres;
+    if (isIBTrACS) {
+      idxSID = headerUpper.indexOf('SID');
+      idxBasin = headerUpper.indexOf('BASIN');
+      idxLat = headerUpper.indexOf('LAT');
+      idxLon = headerUpper.indexOf('LON');
+      idxWind = headerUpper.indexOf('WMO_WIND');
+      idxPres = headerUpper.indexOf('WMO_PRES');
+    } else {
+      idxSID = headerUpper.indexOf('STORM_ID');
+      idxBasin = headerUpper.indexOf('BASIN');
+      idxLat = headerUpper.indexOf('LAT');
+      idxLon = headerUpper.indexOf('LON');
+      idxWind = headerUpper.indexOf('WIND_KT');
+      idxPres = headerUpper.indexOf('PRESSURE_HPA');
     }
 
-    let data;
-    try { data = JSON.parse(responseText); } catch(e) {
-      throw new Error('Server response was incomplete. Try a smaller file or use data/processed/storms.csv.');
+    // Parse rows into per-storm data
+    const storms = {};
+    let totalRows = 0;
+    const startRow = isIBTrACS ? 2 : 1; // IBTrACS has a units row after header
+
+    for (let i = startRow; i < lines.length; i++) {
+      const cols = lines[i].split(',').map(c => c.trim().replace(/"/g, ''));
+      const sid = cols[idxSID];
+      if (!sid || sid === 'SID') continue;
+
+      const basin = cols[idxBasin] || '';
+      // Filter NIO basin only for IBTrACS
+      if (isIBTrACS && !['BB','AS','NI','BOB','ARB'].includes(basin.toUpperCase())) continue;
+
+      const lat = parseFloat(cols[idxLat]);
+      const lon = parseFloat(cols[idxLon]);
+      const wind = parseFloat(cols[idxWind]);
+      const pres = parseFloat(cols[idxPres]);
+
+      if (isNaN(lat) || isNaN(lon)) continue;
+
+      if (!storms[sid]) {
+        storms[sid] = { basin: basin, winds: [], pressures: [], count: 0 };
+      }
+      storms[sid].count++;
+      if (!isNaN(wind)) storms[sid].winds.push(wind);
+      if (!isNaN(pres)) storms[sid].pressures.push(pres);
+      totalRows++;
     }
 
-    if (!res.ok) {
-      throw new Error(data.detail || 'Upload failed with status ' + res.status);
-    }
+    progressBar.style.width = '80%';
+    progressLabel.textContent = 'Building storm summaries...';
+
+    const stormList = Object.entries(storms).map(([sid, s]) => {
+      let b = s.basin.toUpperCase();
+      if (b === 'BB' || b === 'NI') b = 'BOB';
+      else if (b === 'AS') b = 'ARB';
+      const peakWind = s.winds.length > 0 ? Math.max(...s.winds) : 0;
+      const minPres = s.pressures.length > 0 ? Math.min(...s.pressures) : null;
+      return {
+        storm_id: sid, basin: b, obs_count: s.count,
+        peak_wind_kt: Math.round(peakWind * 10) / 10,
+        min_pressure_hpa: minPres ? Math.round(minPres * 10) / 10 : null,
+      };
+    }).filter(s => s.obs_count > 0 && s.peak_wind_kt > 0);
+
+    if (stormList.length === 0) throw new Error('No valid storms found in file. Check that it contains NIO basin data.');
+
+    const schema = isIBTrACS ? 'IBTrACS v04r01' : 'ChakraNetra processed';
+
     progressBar.style.width = '100%';
     progressLabel.textContent = 'Done!';
 
-    // UI: success state
+    // UI: success
     icon.textContent = 'check_circle';
     icon.classList.remove('animate-spin');
     icon.style.color = '#10B981';
-    label.textContent = data.filename + ' ingested successfully';
-    sublabel.textContent = data.total_storms + ' storms · ' + data.total_rows.toLocaleString() + ' rows · Schema: ' + data.schema;
+    label.textContent = file.name + ' ingested successfully';
+    sublabel.textContent = stormList.length + ' storms \u00B7 ' + totalRows.toLocaleString() + ' rows \u00B7 Schema: ' + schema;
 
     // Update stats
-    document.getElementById('upload-rows').textContent = data.total_rows.toLocaleString();
-    document.getElementById('upload-storms').textContent = data.total_storms;
+    document.getElementById('upload-rows').textContent = totalRows.toLocaleString();
+    document.getElementById('upload-storms').textContent = stormList.length;
 
-    // Render ingested storm table
-    document.getElementById('upload-storm-table').innerHTML = data.storms.map(s => {
+    // Count basins
+    const bobCount = stormList.filter(s => s.basin === 'BOB').length;
+    const arbCount = stormList.filter(s => s.basin === 'ARB').length;
+    document.getElementById('upload-basins').textContent = bobCount + ' BOB / ' + arbCount + ' ARB';
+
+    // Render storm table
+    document.getElementById('upload-storm-table').innerHTML = stormList.map(s => {
       const wc = windCategory(s.peak_wind_kt);
       return '<tr class="hover:bg-bg-elevated"><td class="px-3 py-1.5 font-bold text-accent">' + s.storm_id + '</td>' +
         '<td class="px-3 py-1.5"><span class="px-1.5 py-0.5 bg-bg-elevated rounded text-[10px]">' + s.basin + '</span></td>' +
@@ -1097,23 +1164,15 @@ async function handleFileUpload(file) {
         '<td class="px-3 py-1.5 text-center"><span class="px-2 py-0.5 bg-success/20 text-success rounded text-[10px] font-bold">INGESTED</span></td></tr>';
     }).join('');
 
-    // Reset file input so same file can be uploaded again
     document.getElementById('file-input').value = '';
-
-    // Hide progress bar after 2s
     setTimeout(() => { progress.classList.add('hidden'); progressBar.style.width = '0%'; }, 2000);
 
   } catch (err) {
-    // UI: error state
-    let msg = err.message;
-    if (err.name === 'AbortError') {
-      msg = 'Request timed out. The server took too long. Try uploading data/processed/storms.csv instead of the raw IBTrACS file.';
-    }
     icon.textContent = 'error';
     icon.classList.remove('animate-spin');
     icon.style.color = '#EF4444';
     label.textContent = 'Upload failed';
-    sublabel.textContent = msg;
+    sublabel.textContent = err.message;
     progressBar.style.width = '100%';
     progressBar.style.background = '#EF4444';
     progressLabel.textContent = 'Error';
